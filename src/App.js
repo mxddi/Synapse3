@@ -526,7 +526,7 @@ ${JSON.stringify(
                 quadrantTasks.importantUrgent.map((task) => (
                   <article key={task.id} className="task-card">
                     <h4>{task.title}</h4>
-                    <p>Score: I{task.importance} / U{task.urgency}</p>
+                    <p>I{task.importance} / U{task.urgency}</p>
                     <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
                   </article>
                 ))
@@ -540,7 +540,7 @@ ${JSON.stringify(
                 quadrantTasks.notImportantUrgent.map((task) => (
                   <article key={task.id} className="task-card">
                     <h4>{task.title}</h4>
-                    <p>Score: I{task.importance} / U{task.urgency}</p>
+                    <p>I{task.importance} / U{task.urgency}</p>
                     <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
                   </article>
                 ))
@@ -554,7 +554,7 @@ ${JSON.stringify(
                 quadrantTasks.importantNotUrgent.map((task) => (
                   <article key={task.id} className="task-card">
                     <h4>{task.title}</h4>
-                    <p>Score: I{task.importance} / U{task.urgency}</p>
+                    <p>I{task.importance} / U{task.urgency}</p>
                     <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
                   </article>
                 ))
@@ -568,7 +568,7 @@ ${JSON.stringify(
                 quadrantTasks.notImportantNotUrgent.map((task) => (
                   <article key={task.id} className="task-card">
                     <h4>{task.title}</h4>
-                    <p>Score: I{task.importance} / U{task.urgency}</p>
+                    <p>I{task.importance} / U{task.urgency}</p>
                     <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
                   </article>
                 ))

@@ -209,7 +209,7 @@ li {
 }
 
 .importantUrgent {
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.35), rgba(139, 92, 246, 0.3));
+  background: linear-gradient(135deg, rgba(251, 146, 60, 0.5), rgba(249, 115, 22, 0.45));
 }
 
 .notImportantUrgent {
@@ -217,7 +217,7 @@ li {
 }
 
 .importantNotUrgent {
-  background: linear-gradient(135deg, rgba(236, 72, 153, 0.35), rgba(244, 114, 182, 0.3));
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.5), rgba(236, 72, 153, 0.45));
 }
 
 .notImportantNotUrgent {
