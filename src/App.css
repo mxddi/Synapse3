@@ -192,6 +192,13 @@ li {
   margin-bottom: 8px;
 }
 
+.task-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .task-card h4 {
   margin: 0 0 4px;
   font-size: 0.9rem;
@@ -201,6 +208,37 @@ li {
   margin: 2px 0;
   color: #e2e8f0;
   font-size: 0.8rem;
+}
+
+.task-complete-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.task-complete-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border-radius: 4px;
+  accent-color: #22c55e;
+}
+
+.task-complete-icon {
+  color: #86efac;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.task-card-completed {
+  border-color: rgba(134, 239, 172, 0.8);
+}
+
+.task-card-completed h4,
+.task-card-completed p {
+  color: #bbf7d0;
 }
 
 .empty-cell {

@@ -106,6 +106,7 @@ function App() {
       source: "mock",
       urgency: urgencyScoreFromDueDate(t.due),
       importance: 2,
+      completed: false,
     }))
   );
   const [newGoal, setNewGoal] = useState({ name: "", weeklyHours: "" });
@@ -225,6 +226,7 @@ function App() {
         source: "manual",
         urgency: urgencyScoreFromDueDate(newTask.due),
         importance: 2,
+        completed: false,
       },
     ]);
     setStatus("Manual task added.");
@@ -291,6 +293,7 @@ function App() {
             source: "google",
             importance: 2,
             urgency: urgencyScoreFromDueDate(task.due),
+            completed: false,
           });
         });
       }
@@ -399,6 +402,39 @@ ${JSON.stringify(
     } finally {
       setIsSuggesting(false);
     }
+  }
+
+  function toggleTaskCompleted(taskId) {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId ? { ...task, completed: !task.completed } : task
+      )
+    );
+  }
+
+  function renderTaskCard(task) {
+    return (
+      <article key={task.id} className={`task-card ${task.completed ? "task-card-completed" : ""}`}>
+        <div className="task-card-top">
+          <h4>{task.title}</h4>
+          <label className="task-complete-control" title="Mark task complete">
+            <input
+              type="checkbox"
+              className="task-complete-checkbox"
+              checked={Boolean(task.completed)}
+              onChange={() => toggleTaskCompleted(task.id)}
+              aria-label={`Mark ${task.title} as completed`}
+            />
+            {task.completed ? (
+              <span className="task-complete-icon" aria-hidden="true">
+                ✓
+              </span>
+            ) : null}
+          </label>
+        </div>
+        <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
+      </article>
+    );
   }
 
   return (
@@ -523,12 +559,7 @@ ${JSON.stringify(
               {quadrantTasks.importantUrgent.length === 0 ? (
                 <div className="empty-cell">No tasks</div>
               ) : (
-                quadrantTasks.importantUrgent.map((task) => (
-                  <article key={task.id} className="task-card">
-                    <h4>{task.title}</h4>
-                    <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
-                  </article>
-                ))
+                quadrantTasks.importantUrgent.map((task) => renderTaskCard(task))
               )}
             </div>
             <div className="matrix-cell notImportantUrgent">
@@ -536,12 +567,7 @@ ${JSON.stringify(
               {quadrantTasks.notImportantUrgent.length === 0 ? (
                 <div className="empty-cell">No tasks</div>
               ) : (
-                quadrantTasks.notImportantUrgent.map((task) => (
-                  <article key={task.id} className="task-card">
-                    <h4>{task.title}</h4>
-                    <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
-                  </article>
-                ))
+                quadrantTasks.notImportantUrgent.map((task) => renderTaskCard(task))
               )}
             </div>
             <div className="matrix-cell importantNotUrgent">
@@ -549,12 +575,7 @@ ${JSON.stringify(
               {quadrantTasks.importantNotUrgent.length === 0 ? (
                 <div className="empty-cell">No tasks</div>
               ) : (
-                quadrantTasks.importantNotUrgent.map((task) => (
-                  <article key={task.id} className="task-card">
-                    <h4>{task.title}</h4>
-                    <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
-                  </article>
-                ))
+                quadrantTasks.importantNotUrgent.map((task) => renderTaskCard(task))
               )}
             </div>
             <div className="matrix-cell notImportantNotUrgent">
@@ -562,12 +583,7 @@ ${JSON.stringify(
               {quadrantTasks.notImportantNotUrgent.length === 0 ? (
                 <div className="empty-cell">No tasks</div>
               ) : (
-                quadrantTasks.notImportantNotUrgent.map((task) => (
-                  <article key={task.id} className="task-card">
-                    <h4>{task.title}</h4>
-                    <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
-                  </article>
-                ))
+                quadrantTasks.notImportantNotUrgent.map((task) => renderTaskCard(task))
               )}
             </div>
           </div>
