@@ -1,4 +1,4 @@
-# synapse-cursor
+# Synapse
 
 Priority matrix web app that visualizes task urgency and importance in a 4x4 Eisenhower matrix.
 
