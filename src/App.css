@@ -1,0 +1,249 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 40%, #22c55e 100%);
+  color: #f8fafc;
+}
+
+.app-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin-bottom: 8px;
+  font-size: 2.1rem;
+}
+
+.header p {
+  margin: 0;
+  color: #cbd5e1;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.panel,
+.matrix-section,
+.suggestions {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 14px;
+  padding: 16px;
+  backdrop-filter: blur(7px);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.2);
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: 1fr 120px auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stack-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+input,
+button,
+textarea {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(15, 23, 42, 0.45);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 0.95rem;
+}
+
+button {
+  cursor: pointer;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+li {
+  margin-bottom: 6px;
+}
+
+.goal-item {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.goal-view-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.edit-icon-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+.edit-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.goal-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 8px;
+}
+
+.goal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.status {
+  color: #e0f2fe;
+  font-size: 0.9rem;
+  margin-top: 10px;
+}
+
+.matrix-section {
+  text-align: center;
+}
+
+.matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+  min-height: 420px;
+}
+
+.axis-shell {
+  position: relative;
+  max-width: 860px;
+  margin: 20px auto 0;
+  padding: 8px;
+}
+
+.matrix-cell {
+  border-radius: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  text-align: left;
+  overflow: auto;
+}
+
+.cell-header {
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.35);
+}
+
+.task-card {
+  background: rgba(15, 23, 42, 0.36);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.task-card h4 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+}
+
+.task-card p {
+  margin: 2px 0;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+}
+
+.empty-cell {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.importantUrgent {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.35), rgba(139, 92, 246, 0.3));
+}
+
+.notImportantUrgent {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.35), rgba(250, 204, 21, 0.28));
+}
+
+.importantNotUrgent {
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.35), rgba(244, 114, 182, 0.3));
+}
+
+.notImportantNotUrgent {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.3));
+}
+
+.suggestions {
+  margin-top: 18px;
+}
+
+.suggestions textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 150px;
+}
+
+@media (max-width: 900px) {
+  .controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-form {
+    grid-template-columns: 1fr;
+  }
+
+  .matrix-grid {
+    grid-template-columns: 1fr;
+  }
+}
