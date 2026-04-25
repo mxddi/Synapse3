@@ -226,12 +226,6 @@ li {
   accent-color: #22c55e;
 }
 
-.task-complete-icon {
-  color: #86efac;
-  font-weight: 700;
-  font-size: 0.9rem;
-}
-
 .task-card-completed {
   border-color: rgba(134, 239, 172, 0.8);
 }

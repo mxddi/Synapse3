@@ -425,11 +425,6 @@ ${JSON.stringify(
               onChange={() => toggleTaskCompleted(task.id)}
               aria-label={`Mark ${task.title} as completed`}
             />
-            {task.completed ? (
-              <span className="task-complete-icon" aria-hidden="true">
-                ✓
-              </span>
-            ) : null}
           </label>
         </div>
         <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
