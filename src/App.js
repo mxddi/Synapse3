@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Google API scopes ────────────────────────────────────────────────────────
 const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
@@ -103,16 +103,28 @@ function minutesToTimeInput(minutes) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function normalizeAndLimitSuggestions(rawSuggestions, busyByDay) {
+function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitleById = new Map(), idFactory = null) {
   return (Array.isArray(rawSuggestions) ? rawSuggestions : [])
-    .map((s) => ({
-      ...s,
-      day: Number(s.day),
-      startMinute: Number(s.startMinute),
-      endMinute: Number(s.endMinute),
-      taskTitle: String(s.taskTitle || "Untitled task"),
-      reason: String(s.reason || "Scheduled by AI."),
-    }))
+    .map((s, idx) => {
+      const taskId = s.taskId || s.task_id || "";
+      const resolvedTitle =
+        s.taskTitle ||
+        s.task_title ||
+        taskTitleById.get(taskId) ||
+        "Untitled task";
+      const existingSugId = s.sugId || s.sug_id;
+
+      return {
+        ...s,
+        taskId,
+        day: Number(s.day),
+        startMinute: Number(s.startMinute),
+        endMinute: Number(s.endMinute),
+        taskTitle: String(resolvedTitle),
+        reason: String(s.reason || "Scheduled by AI."),
+        sugId: String(existingSugId || (idFactory ? idFactory(idx) : `sug-${idx}`)),
+      };
+    })
     .filter((s) => Number.isInteger(s.day) && s.day >= 0 && s.day <= 6)
     .filter((s) => Number.isFinite(s.startMinute) && Number.isFinite(s.endMinute))
     .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60)
@@ -168,7 +180,11 @@ async function fetchGroqJson(promptText, apiKey) {
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error("Groq returned empty content.");
-  return JSON.parse(content);
+  const unfenced = content
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  return JSON.parse(unfenced);
 }
 
 // ─── Sub-component: WeeklyCalendar ───────────────────────────────────────────
@@ -273,7 +289,7 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
                 const height = Math.max(24, minuteToY(s.endMinute) - top);
                 return (
                   <div
-                    key={`sug-${i}`}
+                    key={s.sugId || `sug-${i}`}
                     className="cal-event cal-event-suggested"
                     style={{ top, height }}
                     onClick={(e) => e.stopPropagation()}
@@ -283,20 +299,22 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
                     <span className="cal-event-time">
                       {minutesToDisplay(s.startMinute)}–{minutesToDisplay(s.endMinute)}
                     </span>
-                    <button
-                      className="cal-sug-add-btn"
-                      onClick={() => onAddSuggestion(s)}
-                      title="Lock this suggestion into the calendar"
-                    >
-                      + Add
-                    </button>
-                    <button
-                      className="cal-sug-add-btn cal-sug-dismiss-btn"
-                      onClick={() => onRemoveSuggestion(s)}
-                      title="Dismiss this suggestion"
-                    >
-                      ✕
-                    </button>
+                    <div className="cal-sug-actions">
+                      <button
+                        className="cal-sug-add-btn"
+                        onClick={() => onAddSuggestion(s)}
+                        title="Lock this suggestion into the calendar"
+                      >
+                        + Add
+                      </button>
+                      <button
+                        className="cal-sug-add-btn cal-sug-dismiss-btn"
+                        onClick={() => onRemoveSuggestion(s)}
+                        title="Dismiss this suggestion"
+                      >
+                        ✕
+                      </button>
+                    </div>
 
                   </div>
                 );
@@ -310,7 +328,7 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
 }
 
 // ─── Sub-component: AddEventModal ─────────────────────────────────────────────
-function AddEventModal({ slot, onConfirm, onCancel }) {
+function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
   const [title, setTitle] = useState("");
   const [startTime, setStart] = useState(minutesToTimeInput(slot.startMinute));
   const [endTime, setEnd] = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
@@ -325,7 +343,6 @@ function AddEventModal({ slot, onConfirm, onCancel }) {
     });
   }
 
-  const weekStart = getWeekStart(new Date());
   const dayDate = addDays(weekStart, slot.day);
   const dayLabel = formatDayHeader(dayDate);
 
@@ -390,7 +407,8 @@ function App() {
   const [calSuggestions, setCalSuggestions] = useState([]);
   const [isGenCalSug, setIsGenCalSug] = useState(false);
   const [calSugStatus, setCalSugStatus] = useState("");
-  let calEventIdCounter = useRef(1000);
+  const calEventIdCounter = useRef(1000);
+  const calSuggestionIdCounter = useRef(1);
 
   // ── load Google Identity script ─────────────────────────────────────────────
   useEffect(() => {
@@ -649,7 +667,13 @@ ${JSON.stringify(prioritized)}
 `;
 
       const parsed = await fetchGroqJson(prompt, apiKey);
-      const sug = normalizeAndLimitSuggestions(parsed.suggestions, busyByDay);
+      const titleByTaskId = new Map(prioritized.map((t) => [t.id, t.title]));
+      const sug = normalizeAndLimitSuggestions(
+        parsed.suggestions,
+        busyByDay,
+        titleByTaskId,
+        () => `sug-${calSuggestionIdCounter.current++}`
+      );
       if (sug.length === 0) throw new Error("No valid suggestions returned.");
       setCalSuggestions(sug);
       setCalSugStatus(`${sug.length} scheduling suggestion${sug.length !== 1 ? "s" : ""} ready. Click "+ Add" on any to lock it in.`);
@@ -678,7 +702,20 @@ ${JSON.stringify(prioritized)}
           const end = start + duration;
           const overlaps = usedSlots[di].some((b) => start < b.endMinute && end > b.startMinute);
           if (!overlaps) {
-            suggestions.push({ taskId: task.id, taskTitle: task.title, day: di, startMinute: start, endMinute: end, reason: `Scheduled for ${task.quadrant}.` });
+            const readableQuadrant = {
+              importantUrgent: "Important + Urgent",
+              notImportantUrgent: "Not Important + Urgent",
+              importantNotUrgent: "Important + Not Urgent",
+              notImportantNotUrgent: "Not Important + Not Urgent",
+            }[task.quadrant] || "priority category";
+            suggestions.push({
+              taskId: task.id,
+              taskTitle: task.title,
+              day: di,
+              startMinute: start,
+              endMinute: end,
+              reason: `Scheduled based on ${readableQuadrant}.`,
+            });
             usedSlots[di].push({ startMinute: start, endMinute: end });
             placed = true;
           }
@@ -686,11 +723,17 @@ ${JSON.stringify(prioritized)}
       }
       if (suggestions.length >= 6) break;
     }
-  return normalizeAndLimitSuggestions(suggestions, busyByDay);
+  const titleByTaskId = new Map(prioritized.map((t) => [t.id, t.title]));
+  return normalizeAndLimitSuggestions(
+    suggestions,
+    busyByDay,
+    titleByTaskId,
+    () => `sug-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
   }
 
   function deleteSuggestionFromCalendar(suggestion) {
-    setCalSuggestions((prev) => prev.filter((s) => s !== suggestion));
+    setCalSuggestions((prev) => prev.filter((s) => s.sugId !== suggestion.sugId));
     setCalSugStatus("Suggestion removed from calendar.");
   }
 
@@ -704,7 +747,7 @@ ${JSON.stringify(prioritized)}
       source: "manual",
     };
     setCalendarEvents((prev) => [...prev, newEv]);
-    setCalSuggestions((prev) => prev.filter((s) => s !== suggestion));
+    setCalSuggestions((prev) => prev.filter((s) => s.sugId !== suggestion.sugId));
     setCalSugStatus("Suggestion added to your calendar!");
   }
 
@@ -792,7 +835,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
     return `${fmt(currentWeekStart)} – ${fmt(end)}, ${end.getFullYear()}`;
   })();
   const safeCalSuggestions = useMemo(
-    () => normalizeAndLimitSuggestions(calSuggestions, Array.from({ length: 7 }, () => [])),
+    () => calSuggestions.slice(0, 6),
     [calSuggestions]
   );
 
@@ -886,6 +929,11 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         </div>
       </section>
 
+      <section className="suggestions">
+        <h2>Prioritization Insights</h2>
+        <p className="status">{suggestionText}</p>
+      </section>
+
       {/* ── Weekly Calendar ── */}
       <section className="calendar-section">
         <h2>Weekly Calendar</h2>
@@ -941,7 +989,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
                 const dayDate = addDays(currentWeekStart, s.day);
                 const dayLabel = formatDayHeader(dayDate);
                 return (
-                  <div key={i} className="sug-card">
+                  <div key={s.sugId || i} className="sug-card">
                     <div className="sug-card-body">
                       <strong>{s.taskTitle}</strong>
                       <span className="sug-time">{dayLabel} · {minutesToDisplay(s.startMinute)} – {minutesToDisplay(s.endMinute)}</span>
@@ -963,16 +1011,11 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         )}
       </section>
 
-      {/* ── Existing suggestions panel ── */}
-      <section className="suggestions">
-        <h2>Suggestions &amp; Alerts</h2>
-        <textarea readOnly value={suggestionText} rows={7} />
-      </section>
-
       {/* ── Add-event modal ── */}
       {addEventSlot && (
         <AddEventModal
           slot={addEventSlot}
+          weekStart={currentWeekStart}
           onConfirm={confirmAddEvent}
           onCancel={() => setAddEventSlot(null)}
         />

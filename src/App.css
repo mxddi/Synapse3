@@ -557,6 +557,18 @@ li {
   font-family: var(--font);
 }
 
+.cal-sug-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  align-self: flex-start;
+}
+
+.cal-sug-actions .cal-sug-add-btn {
+  margin-top: 0;
+}
+
 .sug-card-actions {
   display: flex;
   gap: 6px;
@@ -582,7 +594,7 @@ li {
 
 .cal-sug-dismiss-btn {
   background: rgba(0, 0, 0, 0.08) !important;
-  margin-left: 2px;
+  margin-left: 0;
 }
 
 
