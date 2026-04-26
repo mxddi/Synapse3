@@ -1,6 +1,5 @@
 # Synapse
-
-Priority matrix web app that visualizes task urgency and importance in a 4x4 Eisenhower matrix.
+Synapse is an AI-powered task prioritization web app that bridges the intuitive gap between your daily to-do list and your long-term goals.
 
 ## Run locally
 
