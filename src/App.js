@@ -689,7 +689,10 @@ Prioritized tasks (importance 1-4, urgency 1-4):
 ${JSON.stringify(prioritized)}
 `;
 
-      const parsed = await fetchGroqJson(prompt, apiKey);
+      const parsed = await Promise.race([
+        fetchGroqJson(prompt, apiKey),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Groq calendar request timed out.")), 15000)),
+      ]);
       const titleByTaskId = new Map(prioritized.map((t) => [t.id, t.title]));
       const sug = normalizeAndLimitSuggestions(
         parsed.suggestions,
