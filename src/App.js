@@ -1,19 +1,33 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const GOOGLE_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
-const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+// ─── Google API scopes ────────────────────────────────────────────────────────
+const GOOGLE_TASKS_SCOPE    = "https://www.googleapis.com/auth/tasks.readonly";
+const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GROQ_ENDPOINT         = "https://api.groq.com/openai/v1/chat/completions";
 
+// ─── Calendar display constants ───────────────────────────────────────────────
+const CAL_START_HOUR = 6;   // 6 AM
+const CAL_END_HOUR   = 22;  // 10 PM
+const HOUR_PX        = 64;  // px per hour in the grid
+
+const EVENT_COLORS = {
+  google:    { bg: "#4285F4", text: "#fff" },
+  manual:    { bg: "#34A853", text: "#fff" },
+  suggested: { bg: "#FBBC05", text: "#1a1a1a" },
+};
+
+// ─── Mock data ────────────────────────────────────────────────────────────────
 const mockGoals = [
   { id: "g1", name: "Prepare for data structures exam", weeklyHours: 8 },
-  { id: "g2", name: "Finish product demo deck", weeklyHours: 5 },
-  { id: "g3", name: "Exercise and sleep consistency", weeklyHours: 4 },
+  { id: "g2", name: "Finish product demo deck",         weeklyHours: 5 },
+  { id: "g3", name: "Exercise and sleep consistency",   weeklyHours: 4 },
 ];
 
 const mockTasks = [
-  { id: "t1", title: "Review binary trees notes", due: inDays(1), notes: "study" },
-  { id: "t2", title: "Design slides for demo", due: inDays(3), notes: "work project" },
-  { id: "t3", title: "Book dentist appointment", due: inDays(9), notes: "personal admin" },
-  { id: "t4", title: "Watch random YouTube backlog", due: inDays(14), notes: "optional leisure" },
+  { id: "t1", title: "Review binary trees notes", due: inDays(1),  notes: "study"          },
+  { id: "t2", title: "Design slides for demo",    due: inDays(3),  notes: "work project"   },
+  { id: "t3", title: "Book dentist appointment",  due: inDays(9),  notes: "personal admin" },
+  { id: "t4", title: "Watch random YouTube",      due: inDays(14), notes: "optional"       },
 ];
 
 function inDays(days) {
@@ -22,178 +36,379 @@ function inDays(days) {
   return d.toISOString();
 }
 
+// ─── Pure helper functions ────────────────────────────────────────────────────
 function urgencyScoreFromDueDate(dueDate) {
-  if (!dueDate) {
-    return 1;
-  }
-
-  const now = new Date();
-  const due = new Date(dueDate);
-  const ms = due.getTime() - now.getTime();
-  const days = ms / (1000 * 60 * 60 * 24);
-
-  if (days <= 0) return 4;
-  if (days <= 2) return 4;
-  if (days <= 5) return 3;
+  if (!dueDate) return 1;
+  const days = (new Date(dueDate) - new Date()) / (1000 * 60 * 60 * 24);
+  if (days <= 0)  return 4;
+  if (days <= 2)  return 4;
+  if (days <= 5)  return 3;
   if (days <= 10) return 2;
   return 1;
 }
 
 function getQuadrant(importance, urgency) {
-  const highImportance = importance >= 3;
-  const highUrgency = urgency >= 3;
-
-  if (highImportance && highUrgency) return "importantUrgent";
-  if (!highImportance && highUrgency) return "notImportantUrgent";
-  if (highImportance && !highUrgency) return "importantNotUrgent";
+  const hi = importance >= 3, hu = urgency >= 3;
+  if (hi && hu)   return "importantUrgent";
+  if (!hi && hu)  return "notImportantUrgent";
+  if (hi && !hu)  return "importantNotUrgent";
   return "notImportantNotUrgent";
 }
 
 function buildFallbackImportance(task, goals) {
   const title = `${task.title} ${task.notes || ""}`.toLowerCase();
-  const hits = goals.filter((goal) => {
-    const keywords = goal.name.toLowerCase().split(/\s+/).filter(Boolean);
-    return keywords.some((word) => word.length > 3 && title.includes(word));
-  }).length;
-
+  const hits = goals.filter((g) =>
+    g.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3).some((w) => title.includes(w))
+  ).length;
   if (hits >= 2) return 4;
   if (hits === 1) return 3;
   if (task.notes) return 2;
   return 1;
 }
 
+// ─── Calendar date helpers ────────────────────────────────────────────────────
+function getWeekStart(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay()); // back to Sunday
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function addDays(base, n) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function formatDayHeader(date) {
+  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+function minutesToDisplay(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const period = h >= 12 ? "PM" : "AM";
+  const dh = h % 12 === 0 ? 12 : h % 12;
+  return `${dh}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function timeStringToMinutes(str) {
+  const [h, m] = (str || "").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function minutesToTimeInput(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function calendarEventFromGoogleEvent(gEvent, weekStart) {
+  const start = gEvent.start?.dateTime || gEvent.start?.date;
+  const end   = gEvent.end?.dateTime   || gEvent.end?.date;
+  if (!start || !end) return null;
+
+  const startDate = new Date(start);
+  const endDate   = new Date(end);
+  const ws        = new Date(weekStart);
+  ws.setHours(0, 0, 0, 0);
+
+  const diffDays = Math.floor((startDate - ws) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0 || diffDays > 6) return null;
+
+  return {
+    id:          gEvent.id,
+    title:       gEvent.summary || "Busy",
+    day:         diffDays,
+    startMinute: startDate.getHours() * 60 + startDate.getMinutes(),
+    endMinute:   endDate.getHours()   * 60 + endDate.getMinutes(),
+    source:      "google",
+  };
+}
+
+// ─── Groq helper ─────────────────────────────────────────────────────────────
 async function fetchGroqJson(promptText, apiKey) {
   const response = await fetch(GROQ_ENDPOINT, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "llama-3.3-70b-versatile",
       temperature: 0.2,
       messages: [
-        {
-          role: "system",
-          content: "You output strict minified JSON only.",
-        },
-        {
-          role: "user",
-          content: promptText,
-        },
+        { role: "system", content: "You output strict minified JSON only." },
+        { role: "user",   content: promptText },
       ],
     }),
   });
-
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Groq error ${response.status}: ${text}`);
   }
-
-  const data = await response.json();
+  const data    = await response.json();
   const content = data.choices?.[0]?.message?.content?.trim();
-  if (!content) {
-    throw new Error("Groq returned empty content.");
-  }
+  if (!content) throw new Error("Groq returned empty content.");
   return JSON.parse(content);
 }
 
+// ─── Sub-component: WeeklyCalendar ───────────────────────────────────────────
+function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, onAddSuggestion }) {
+  const hours     = [];
+  for (let h = CAL_START_HOUR; h < CAL_END_HOUR; h++) hours.push(h);
+  const totalPx   = hours.length * HOUR_PX;
+  const dayLabels = Array.from({ length: 7 }, (_, i) => formatDayHeader(addDays(weekStart, i)));
+
+  function minuteToY(minute) {
+    const clipped = Math.max(CAL_START_HOUR * 60, Math.min(CAL_END_HOUR * 60, minute));
+    return ((clipped - CAL_START_HOUR * 60) / 60) * HOUR_PX;
+  }
+
+  function handleColumnClick(e, dayIndex) {
+    const rect   = e.currentTarget.getBoundingClientRect();
+    const rawY   = e.clientY - rect.top;
+    const minute = Math.round(((rawY / HOUR_PX) * 60 + CAL_START_HOUR * 60) / 15) * 15;
+    const clamped = Math.max(CAL_START_HOUR * 60, Math.min((CAL_END_HOUR - 1) * 60, minute));
+    onSlotClick(dayIndex, clamped);
+  }
+
+  const dayEvents = useMemo(() => {
+    const map = Array.from({ length: 7 }, () => []);
+    calendarEvents.forEach((ev) => {
+      if (ev.day >= 0 && ev.day < 7) map[ev.day].push(ev);
+    });
+    return map;
+  }, [calendarEvents]);
+
+  const daySuggestions = useMemo(() => {
+    const map = Array.from({ length: 7 }, () => []);
+    suggestions.forEach((s) => {
+      if (s.day >= 0 && s.day < 7) map[s.day].push(s);
+    });
+    return map;
+  }, [suggestions]);
+
+  return (
+    <div className="cal-wrap">
+      {/* Day header row */}
+      <div className="cal-header-row">
+        <div className="cal-time-gutter" />
+        {dayLabels.map((label, i) => (
+          <div key={i} className="cal-day-header">{label}</div>
+        ))}
+      </div>
+
+      {/* Scrollable body */}
+      <div className="cal-body-scroll">
+        <div className="cal-body" style={{ height: totalPx }}>
+          {/* Time gutter */}
+          <div className="cal-time-gutter">
+            {hours.map((h) => (
+              <div key={h} className="cal-hour-label" style={{ top: (h - CAL_START_HOUR) * HOUR_PX }}>
+                {h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`}
+              </div>
+            ))}
+          </div>
+
+          {/* Day columns */}
+          {Array.from({ length: 7 }, (_, dayIdx) => (
+            <div
+              key={dayIdx}
+              className="cal-day-col"
+              style={{ height: totalPx }}
+              onClick={(e) => handleColumnClick(e, dayIdx)}
+            >
+              {/* Hour lines */}
+              {hours.map((h) => (
+                <div
+                  key={h}
+                  className="cal-hour-line"
+                  style={{ top: (h - CAL_START_HOUR) * HOUR_PX }}
+                />
+              ))}
+
+              {/* Calendar events */}
+              {dayEvents[dayIdx].map((ev) => {
+                const top    = minuteToY(ev.startMinute);
+                const height = Math.max(20, minuteToY(ev.endMinute) - top);
+                const colors = EVENT_COLORS[ev.source] || EVENT_COLORS.manual;
+                return (
+                  <div
+                    key={ev.id}
+                    className="cal-event"
+                    style={{ top, height, backgroundColor: colors.bg, color: colors.text }}
+                    onClick={(e) => e.stopPropagation()}
+                    title={`${ev.title}\n${minutesToDisplay(ev.startMinute)} – ${minutesToDisplay(ev.endMinute)}`}
+                  >
+                    <span className="cal-event-title">{ev.title}</span>
+                    <span className="cal-event-time">
+                      {minutesToDisplay(ev.startMinute)}–{minutesToDisplay(ev.endMinute)}
+                    </span>
+                  </div>
+                );
+              })}
+
+              {/* AI suggested slots */}
+              {daySuggestions[dayIdx].map((s, i) => {
+                const top    = minuteToY(s.startMinute);
+                const height = Math.max(24, minuteToY(s.endMinute) - top);
+                return (
+                  <div
+                    key={`sug-${i}`}
+                    className="cal-event cal-event-suggested"
+                    style={{ top, height }}
+                    onClick={(e) => e.stopPropagation()}
+                    title={s.reason}
+                  >
+                    <span className="cal-event-title">✨ {s.taskTitle}</span>
+                    <span className="cal-event-time">
+                      {minutesToDisplay(s.startMinute)}–{minutesToDisplay(s.endMinute)}
+                    </span>
+                    <button
+                      className="cal-sug-add-btn"
+                      onClick={() => onAddSuggestion(s)}
+                      title="Lock this suggestion into the calendar"
+                    >
+                      + Add
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sub-component: AddEventModal ─────────────────────────────────────────────
+function AddEventModal({ slot, onConfirm, onCancel }) {
+  const [title, setTitle]       = useState("");
+  const [startTime, setStart]   = useState(minutesToTimeInput(slot.startMinute));
+  const [endTime, setEnd]       = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
+
+  function handleConfirm() {
+    if (!title.trim()) return;
+    onConfirm({
+      title:       title.trim(),
+      day:         slot.day,
+      startMinute: timeStringToMinutes(startTime),
+      endMinute:   timeStringToMinutes(endTime),
+    });
+  }
+
+  const weekStart   = getWeekStart(new Date());
+  const dayDate     = addDays(weekStart, slot.day);
+  const dayLabel    = formatDayHeader(dayDate);
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <h3>Add Event — {dayLabel}</h3>
+        <div className="modal-field">
+          <label>Title</label>
+          <input
+            autoFocus
+            placeholder="Event title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleConfirm()}
+          />
+        </div>
+        <div className="modal-field">
+          <label>Start</label>
+          <input type="time" step="900" value={startTime} onChange={(e) => setStart(e.target.value)} />
+        </div>
+        <div className="modal-field">
+          <label>End</label>
+          <input type="time" step="900" value={endTime} onChange={(e) => setEnd(e.target.value)} />
+        </div>
+        <div className="modal-actions">
+          <button onClick={handleConfirm}>Add Event</button>
+          <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
 function App() {
-  const [goals, setGoals] = useState(mockGoals);
-  const [tasks, setTasks] = useState(
+  // ── existing state ──────────────────────────────────────────────────────────
+  const [goals, setGoals]                   = useState(mockGoals);
+  const [tasks, setTasks]                   = useState(
     mockTasks.map((t) => ({
-      ...t,
-      source: "mock",
-      urgency: urgencyScoreFromDueDate(t.due),
-      importance: 2,
-      completed: false,
+      ...t, source: "mock", urgency: urgencyScoreFromDueDate(t.due), importance: 2, completed: false,
     }))
   );
-  const [newGoal, setNewGoal] = useState({ name: "", weeklyHours: "" });
-  const [editingGoalId, setEditingGoalId] = useState(null);
-  const [editingGoal, setEditingGoal] = useState({ name: "", weeklyHours: "" });
-  const [newTask, setNewTask] = useState({ title: "", due: "", notes: "" });
-  const [status, setStatus] = useState("Using mock data. Connect Google Tasks or add tasks manually.");
-  const [isScoring, setIsScoring] = useState(false);
-  const [suggestionText, setSuggestionText] = useState(
-    "Suggestions will appear here after scoring your tasks."
-  );
-  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [newGoal, setNewGoal]               = useState({ name: "", weeklyHours: "" });
+  const [editingGoalId, setEditingGoalId]   = useState(null);
+  const [editingGoal, setEditingGoal]       = useState({ name: "", weeklyHours: "" });
+  const [newTask, setNewTask]               = useState({ title: "", due: "", notes: "" });
+  const [status, setStatus]                 = useState("Using mock data. Connect Google Tasks or add tasks manually.");
+  const [isScoring, setIsScoring]           = useState(false);
+  const [suggestionText, setSuggestionText] = useState("Suggestions will appear here after scoring your tasks.");
+  const [isSuggesting, setIsSuggesting]     = useState(false);
   const [tokenClientReady, setTokenClientReady] = useState(false);
   const [googleTokenClient, setGoogleTokenClient] = useState(null);
 
+  // ── calendar state ──────────────────────────────────────────────────────────
+  const [calendarEvents, setCalendarEvents]         = useState([]);
+  const [calendarStatus, setCalendarStatus]         = useState("Connect Google Calendar or click a time slot to add events.");
+  const [isSyncingCal, setIsSyncingCal]             = useState(false);
+  const [calTokenClient, setCalTokenClient]         = useState(null);
+  const [currentWeekStart, setCurrentWeekStart]     = useState(() => getWeekStart(new Date()));
+  const [addEventSlot, setAddEventSlot]             = useState(null);  // {day, startMinute} or null
+  const [calSuggestions, setCalSuggestions]         = useState([]);
+  const [isGenCalSug, setIsGenCalSug]               = useState(false);
+  const [calSugStatus, setCalSugStatus]             = useState("");
+  let calEventIdCounter = useRef(1000);
+
+  // ── load Google Identity script ─────────────────────────────────────────────
   useEffect(() => {
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      setTokenClientReady(true);
-    };
+    const script    = document.createElement("script");
+    script.src      = "https://accounts.google.com/gsi/client";
+    script.async    = true;
+    script.defer    = true;
+    script.onload   = () => setTokenClientReady(true);
     document.body.appendChild(script);
     return () => document.body.removeChild(script);
   }, []);
 
+  // ── derived task data ───────────────────────────────────────────────────────
   const scoredTasks = useMemo(
-    () =>
-      tasks.map((task) => ({
-        ...task,
-        urgency: urgencyScoreFromDueDate(task.due),
-        quadrant: getQuadrant(task.importance, urgencyScoreFromDueDate(task.due)),
-      })),
+    () => tasks.map((t) => ({
+      ...t,
+      urgency:  urgencyScoreFromDueDate(t.due),
+      quadrant: getQuadrant(t.importance, urgencyScoreFromDueDate(t.due)),
+    })),
     [tasks]
   );
 
   const quadrantTasks = useMemo(() => {
     return scoredTasks.reduce(
-      (acc, task) => {
-        acc[task.quadrant].push(task);
-        return acc;
-      },
-      {
-        importantUrgent: [],
-        notImportantUrgent: [],
-        importantNotUrgent: [],
-        notImportantNotUrgent: [],
-      }
+      (acc, t) => { acc[t.quadrant].push(t); return acc; },
+      { importantUrgent: [], notImportantUrgent: [], importantNotUrgent: [], notImportantNotUrgent: [] }
     );
   }, [scoredTasks]);
 
   const quadrantCounts = useMemo(() => {
     return scoredTasks.reduce(
-      (acc, task) => {
-        acc[task.quadrant] += 1;
-        return acc;
-      },
-      {
-        importantUrgent: 0,
-        notImportantUrgent: 0,
-        importantNotUrgent: 0,
-        notImportantNotUrgent: 0,
-      }
+      (acc, t) => { acc[t.quadrant] += 1; return acc; },
+      { importantUrgent: 0, notImportantUrgent: 0, importantNotUrgent: 0, notImportantNotUrgent: 0 }
     );
   }, [scoredTasks]);
 
+  // ── goal functions ──────────────────────────────────────────────────────────
   function addGoal(event) {
     event.preventDefault();
     if (!newGoal.name.trim() || !newGoal.weeklyHours) return;
-    setGoals((prev) => [
-      ...prev,
-      {
-        id: `g-${Date.now()}`,
-        name: newGoal.name.trim(),
-        weeklyHours: Number(newGoal.weeklyHours),
-      },
-    ]);
+    setGoals((prev) => [...prev, { id: `g-${Date.now()}`, name: newGoal.name.trim(), weeklyHours: Number(newGoal.weeklyHours) }]);
     setNewGoal({ name: "", weeklyHours: "" });
   }
 
   function startEditingGoal(goal) {
     setEditingGoalId(goal.id);
-    setEditingGoal({
-      name: goal.name,
-      weeklyHours: String(goal.weeklyHours),
-    });
+    setEditingGoal({ name: goal.name, weeklyHours: String(goal.weeklyHours) });
   }
 
   function cancelEditingGoal() {
@@ -204,220 +419,315 @@ function App() {
   function saveGoalEdit(goalId) {
     if (!editingGoal.name.trim() || !editingGoal.weeklyHours) return;
     setGoals((prev) =>
-      prev.map((goal) =>
-        goal.id === goalId
-          ? { ...goal, name: editingGoal.name.trim(), weeklyHours: Number(editingGoal.weeklyHours) }
-          : goal
-      )
+      prev.map((g) => g.id === goalId ? { ...g, name: editingGoal.name.trim(), weeklyHours: Number(editingGoal.weeklyHours) } : g)
     );
     cancelEditingGoal();
   }
 
+  // ── task functions ──────────────────────────────────────────────────────────
   function addManualTask(event) {
     event.preventDefault();
     if (!newTask.title.trim()) return;
-    setTasks((prev) => [
-      ...prev,
-      {
-        id: `m-${Date.now()}`,
-        title: newTask.title.trim(),
-        due: newTask.due || null,
-        notes: newTask.notes.trim(),
-        source: "manual",
-        urgency: urgencyScoreFromDueDate(newTask.due),
-        importance: 2,
-        completed: false,
-      },
-    ]);
+    setTasks((prev) => [...prev, {
+      id: `m-${Date.now()}`, title: newTask.title.trim(), due: newTask.due || null,
+      notes: newTask.notes.trim(), source: "manual", urgency: urgencyScoreFromDueDate(newTask.due),
+      importance: 2, completed: false,
+    }]);
     setStatus("Manual task added.");
     setNewTask({ title: "", due: "", notes: "" });
   }
 
+  function toggleTaskCompleted(taskId) {
+    setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, completed: !t.completed } : t));
+  }
+
+  // ── Google Tasks ────────────────────────────────────────────────────────────
   async function connectGoogleTasks() {
     const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      setStatus("Missing REACT_APP_GOOGLE_CLIENT_ID in your environment.");
-      return;
-    }
+    if (!clientId) { setStatus("Missing REACT_APP_GOOGLE_CLIENT_ID."); return; }
+    if (!tokenClientReady || !window.google?.accounts?.oauth2) { setStatus("Google script not ready yet."); return; }
 
-    if (!tokenClientReady || !window.google?.accounts?.oauth2) {
-      setStatus("Google Identity script not loaded yet. Try again in a second.");
-      return;
-    }
-
-    const tokenClient =
-      googleTokenClient ||
-      window.google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: GOOGLE_SCOPE,
-        callback: async (tokenResponse) => {
-          if (!tokenResponse?.access_token) {
-            setStatus("Google auth did not return an access token.");
-            return;
-          }
-          await loadGoogleTasks(tokenResponse.access_token);
-        },
-      });
-
-    if (!googleTokenClient) {
-      setGoogleTokenClient(tokenClient);
-    }
-
-    tokenClient.requestAccessToken({ prompt: "consent" });
+    const tc = googleTokenClient || window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_TASKS_SCOPE,
+      callback: async (resp) => {
+        if (!resp?.access_token) { setStatus("Google auth failed."); return; }
+        await loadGoogleTasks(resp.access_token);
+      },
+    });
+    if (!googleTokenClient) setGoogleTokenClient(tc);
+    tc.requestAccessToken({ prompt: "consent" });
   }
 
   async function loadGoogleTasks(accessToken) {
     try {
-      setStatus("Loading tasks from Google Tasks...");
-      const listsRes = await fetch("https://tasks.googleapis.com/tasks/v1/users/@me/lists", {
+      setStatus("Loading Google Tasks...");
+      const listsRes  = await fetch("https://tasks.googleapis.com/tasks/v1/users/@me/lists", {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!listsRes.ok) throw new Error(`Lists request failed: ${listsRes.status}`);
-      const listsData = await listsRes.json();
-      const lists = listsData.items || [];
+      const lists = (await listsRes.json()).items || [];
 
-      const allTasks = [];
+      const all = [];
       for (const list of lists) {
-        const tasksRes = await fetch(
+        const res = await fetch(
           `https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false&maxResults=100`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        if (!tasksRes.ok) continue;
-        const tasksData = await tasksRes.json();
-        (tasksData.items || []).forEach((task) => {
-          allTasks.push({
-            id: task.id,
-            title: task.title || "Untitled task",
-            due: task.due || null,
-            notes: task.notes || "",
-            source: "google",
-            importance: 2,
-            urgency: urgencyScoreFromDueDate(task.due),
-            completed: false,
-          });
+        if (!res.ok) continue;
+        ((await res.json()).items || []).forEach((t) => {
+          all.push({ id: t.id, title: t.title || "Untitled", due: t.due || null, notes: t.notes || "",
+            source: "google", importance: 2, urgency: urgencyScoreFromDueDate(t.due), completed: false });
         });
       }
-
-      if (allTasks.length === 0) {
-        setStatus("Connected to Google, but no active tasks were found.");
-        return;
-      }
-
-      setTasks(allTasks);
-      setStatus(`Imported ${allTasks.length} tasks from Google Tasks.`);
-    } catch (error) {
-      setStatus(`Failed to load Google Tasks: ${error.message}`);
+      if (!all.length) { setStatus("Connected but no active tasks found."); return; }
+      setTasks(all);
+      setStatus(`Imported ${all.length} tasks from Google Tasks.`);
+    } catch (err) {
+      setStatus(`Failed to load Google Tasks: ${err.message}`);
     }
   }
 
-  async function scoreTaskImportanceWithGroq() {
-    if (tasks.length === 0) {
-      setStatus("No tasks to score yet.");
+  // ── Google Calendar ─────────────────────────────────────────────────────────
+  async function connectGoogleCalendar() {
+    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+    if (!clientId) { setCalendarStatus("Missing REACT_APP_GOOGLE_CLIENT_ID."); return; }
+    if (!tokenClientReady || !window.google?.accounts?.oauth2) { setCalendarStatus("Google script not ready yet."); return; }
+
+    const tc = calTokenClient || window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_CALENDAR_SCOPE,
+      callback: async (resp) => {
+        if (!resp?.access_token) { setCalendarStatus("Google Calendar auth failed."); return; }
+        await loadGoogleCalendarEvents(resp.access_token);
+      },
+    });
+    if (!calTokenClient) setCalTokenClient(tc);
+    tc.requestAccessToken({ prompt: "consent" });
+  }
+
+  async function loadGoogleCalendarEvents(accessToken) {
+    setIsSyncingCal(true);
+    setCalendarStatus("Loading Google Calendar events...");
+    try {
+      const weekEnd  = addDays(currentWeekStart, 7);
+      const timeMin  = currentWeekStart.toISOString();
+      const timeMax  = weekEnd.toISOString();
+      const url      = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=100`;
+      const res      = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!res.ok) throw new Error(`Calendar request failed: ${res.status}`);
+      const items = (await res.json()).items || [];
+
+      const mapped = items
+        .map((ev) => calendarEventFromGoogleEvent(ev, currentWeekStart))
+        .filter(Boolean);
+
+      // Keep manual events, replace google ones
+      setCalendarEvents((prev) => [
+        ...prev.filter((e) => e.source !== "google"),
+        ...mapped,
+      ]);
+      setCalendarStatus(`Synced ${mapped.length} Google Calendar event${mapped.length !== 1 ? "s" : ""} for this week.`);
+    } catch (err) {
+      setCalendarStatus(`Failed to load Google Calendar: ${err.message}`);
+    } finally {
+      setIsSyncingCal(false);
+    }
+  }
+
+  // ── Manual calendar events ──────────────────────────────────────────────────
+  function handleSlotClick(dayIndex, startMinute) {
+    setAddEventSlot({ day: dayIndex, startMinute });
+  }
+
+  function confirmAddEvent({ title, day, startMinute, endMinute }) {
+    const newEv = {
+      id:          `cal-${calEventIdCounter.current++}`,
+      title,
+      day,
+      startMinute,
+      endMinute:   endMinute > startMinute ? endMinute : startMinute + 60,
+      source:      "manual",
+    };
+    setCalendarEvents((prev) => [...prev, newEv]);
+    setCalendarStatus("Manual event added.");
+    setAddEventSlot(null);
+    // Clear any suggestions that now overlap this slot
+    setCalSuggestions((prev) =>
+      prev.filter((s) => s.day !== day || s.endMinute <= startMinute || s.startMinute >= newEv.endMinute)
+    );
+  }
+
+  // ── AI calendar scheduling suggestions ─────────────────────────────────────
+  async function generateCalendarSuggestions() {
+    const apiKey = process.env.REACT_APP_GROQ_KEY;
+    setIsGenCalSug(true);
+    setCalSugStatus("Analyzing your schedule for open slots…");
+    setCalSuggestions([]);
+
+    // Build a list of busy blocks per day
+    const busyByDay = Array.from({ length: 7 }, () => []);
+    calendarEvents.forEach((ev) => {
+      if (ev.day >= 0 && ev.day < 7) {
+        busyByDay[ev.day].push({ startMinute: ev.startMinute, endMinute: ev.endMinute });
+      }
+    });
+
+    // Sort tasks by priority (importance desc, urgency desc)
+    const prioritized = [...scoredTasks]
+      .filter((t) => !t.completed)
+      .sort((a, b) => (b.importance * 2 + b.urgency) - (a.importance * 2 + a.urgency))
+      .slice(0, 8)
+      .map((t) => ({ id: t.id, title: t.title, importance: t.importance, urgency: t.urgency, quadrant: t.quadrant }));
+
+    const fallback = buildLocalCalSuggestions(busyByDay, prioritized);
+
+    if (!apiKey) {
+      setCalSuggestions(fallback);
+      setCalSugStatus("Showing local suggestions. Add REACT_APP_GROQ_KEY for AI-powered scheduling.");
+      setIsGenCalSug(false);
       return;
     }
 
-    const apiKey = process.env.REACT_APP_GROQ_KEY;
-    if (!apiKey) {
-      setStatus("Missing REACT_APP_GROQ_KEY in your environment.");
-      return;
+    try {
+      const busySummary = busyByDay.map((blocks, d) => ({
+        dayIndex: d,
+        busy: blocks.map((b) => `${minutesToDisplay(b.startMinute)}–${minutesToDisplay(b.endMinute)}`),
+      }));
+
+      const prompt = `
+You are a scheduling assistant. Return ONLY strict minified JSON in this exact shape:
+{"suggestions":[{"taskId":"string","taskTitle":"string","day":0,"startMinute":540,"endMinute":660,"reason":"short sentence"}]}
+
+Rules:
+- day is 0=Sunday through 6=Saturday
+- startMinute and endMinute are minutes from midnight (e.g. 9:00 AM = 540)
+- Only schedule between ${CAL_START_HOUR * 60} (${CAL_START_HOUR}AM) and ${CAL_END_HOUR * 60} (${CAL_END_HOUR === 12 ? "12PM" : `${CAL_END_HOUR - 12}PM`})
+- Never overlap with existing busy blocks
+- Higher importance/urgency tasks get earlier and longer slots
+- Provide at most 6 suggestions total
+
+Current busy blocks this week:
+${JSON.stringify(busySummary)}
+
+Prioritized tasks (importance 1-4, urgency 1-4):
+${JSON.stringify(prioritized)}
+`;
+
+      const parsed = await fetchGroqJson(prompt, apiKey);
+      const sug    = (parsed.suggestions || []).filter(
+        (s) => typeof s.day === "number" && s.startMinute < s.endMinute
+      );
+      if (sug.length === 0) throw new Error("No valid suggestions returned.");
+      setCalSuggestions(sug);
+      setCalSugStatus(`${sug.length} scheduling suggestion${sug.length !== 1 ? "s" : ""} ready. Click "+ Add" on any to lock it in.`);
+    } catch (err) {
+      setCalSuggestions(fallback);
+      setCalSugStatus(`Groq failed; showing local suggestions. (${err.message})`);
+    } finally {
+      setIsGenCalSug(false);
     }
+  }
+
+  function buildLocalCalSuggestions(busyByDay, prioritized) {
+    const suggestions = [];
+    const usedSlots   = busyByDay.map((blocks) => [...blocks]); // copy
+
+    for (const task of prioritized) {
+      const duration   = task.importance >= 3 ? 90 : 60; // minutes
+      const startSearch = task.urgency >= 3 ? 1 : 3; // prefer earlier days for urgent tasks
+      let placed = false;
+
+      for (let di = startSearch; di < 7 && !placed; di++) {
+        for (let start = CAL_START_HOUR * 60; start + duration <= CAL_END_HOUR * 60; start += 30) {
+          const end     = start + duration;
+          const overlaps = usedSlots[di].some((b) => start < b.endMinute && end > b.startMinute);
+          if (!overlaps) {
+            suggestions.push({ taskId: task.id, taskTitle: task.title, day: di, startMinute: start, endMinute: end, reason: `Scheduled for ${task.quadrant}.` });
+            usedSlots[di].push({ startMinute: start, endMinute: end });
+            placed = true;
+          }
+        }
+      }
+      if (suggestions.length >= 6) break;
+    }
+    return suggestions;
+  }
+
+  function addSuggestionToCalendar(suggestion) {
+    const newEv = {
+      id:          `cal-${calEventIdCounter.current++}`,
+      title:       suggestion.taskTitle,
+      day:         suggestion.day,
+      startMinute: suggestion.startMinute,
+      endMinute:   suggestion.endMinute,
+      source:      "manual",
+    };
+    setCalendarEvents((prev) => [...prev, newEv]);
+    setCalSuggestions((prev) => prev.filter((s) => s !== suggestion));
+    setCalSugStatus("Suggestion added to your calendar!");
+  }
+
+  // ── Groq importance scoring ─────────────────────────────────────────────────
+  async function scoreTaskImportanceWithGroq() {
+    if (!tasks.length) { setStatus("No tasks to score."); return; }
+    const apiKey = process.env.REACT_APP_GROQ_KEY;
+    if (!apiKey) { setStatus("Missing REACT_APP_GROQ_KEY."); return; }
 
     setIsScoring(true);
     setStatus("Scoring task importance with Groq...");
     try {
       const prompt = `
-Return strict JSON in this exact shape:
-{"scores":[{"taskId":"string","importance":1-4,"reason":"short"}]}
-
-Goals:
-${JSON.stringify(goals)}
-
-Tasks:
-${JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, due: t.due, notes: t.notes })))}
-
-Rules:
-- Score "importance" from 1-4 based on alignment with goals and weekly hours.
-- 4 means strongly aligned to core goals this week; 1 means weak/no alignment.
-- Include every task ID exactly once.
+Return strict JSON: {"scores":[{"taskId":"string","importance":1-4,"reason":"short"}]}
+Goals: ${JSON.stringify(goals)}
+Tasks: ${JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, due: t.due, notes: t.notes })))}
+Rules: Score importance 1-4 by goal alignment. 4=strongly aligned this week; 1=weak/none. Include every task ID.
 `;
-
       const parsed = await fetchGroqJson(prompt, apiKey);
-      const map = new Map((parsed.scores || []).map((s) => [s.taskId, Number(s.importance)]));
-
+      const map    = new Map((parsed.scores || []).map((s) => [s.taskId, Number(s.importance)]));
       setTasks((prev) =>
-        prev.map((task) => ({
-          ...task,
-          importance: [1, 2, 3, 4].includes(map.get(task.id))
-            ? map.get(task.id)
-            : buildFallbackImportance(task, goals),
+        prev.map((t) => ({
+          ...t,
+          importance: [1, 2, 3, 4].includes(map.get(t.id)) ? map.get(t.id) : buildFallbackImportance(t, goals),
         }))
       );
       setStatus("Importance scoring complete.");
-    } catch (error) {
-      setTasks((prev) =>
-        prev.map((task) => ({
-          ...task,
-          importance: buildFallbackImportance(task, goals),
-        }))
-      );
-      setStatus(`Groq scoring failed, used fallback logic: ${error.message}`);
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => ({ ...t, importance: buildFallbackImportance(t, goals) })));
+      setStatus(`Groq scoring failed, used fallback: ${err.message}`);
     } finally {
       setIsScoring(false);
     }
   }
 
   async function generateSuggestions() {
-    const apiKey = process.env.REACT_APP_GROQ_KEY;
+    const apiKey  = process.env.REACT_APP_GROQ_KEY;
     const fallback = buildLocalSuggestion(scoredTasks, goals, quadrantCounts);
-
-    if (!apiKey) {
-      setSuggestionText(`${fallback}\n\n(Set REACT_APP_GROQ_KEY for AI suggestions.)`);
-      return;
-    }
+    if (!apiKey) { setSuggestionText(`${fallback}\n\n(Set REACT_APP_GROQ_KEY for AI suggestions.)`); return; }
 
     setIsSuggesting(true);
     try {
       const prompt = `
-You are a productivity coach. Return strict JSON:
-{"suggestion":"2-4 short actionable sentences with alerts if needed"}
-
-Goals with weekly hours:
-${JSON.stringify(goals)}
-
-Tasks with urgency and importance:
-${JSON.stringify(
-        scoredTasks.map((t) => ({
-          title: t.title,
-          due: t.due,
-          urgency: t.urgency,
-          importance: t.importance,
-          quadrant: t.quadrant,
-        }))
-      )}
+You are a productivity coach. Return strict JSON: {"suggestion":"2-4 short actionable sentences with alerts if needed"}
+Goals with weekly hours: ${JSON.stringify(goals)}
+Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ title: t.title, due: t.due, urgency: t.urgency, importance: t.importance, quadrant: t.quadrant })))}
 `;
       const parsed = await fetchGroqJson(prompt, apiKey);
       setSuggestionText(parsed.suggestion || fallback);
-    } catch (error) {
-      setSuggestionText(`${fallback}\n\n(AI suggestion fallback used: ${error.message})`);
+    } catch (err) {
+      setSuggestionText(`${fallback}\n\n(AI suggestion fallback: ${err.message})`);
     } finally {
       setIsSuggesting(false);
     }
   }
 
-  function toggleTaskCompleted(taskId) {
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed } : task
-      )
-    );
-  }
-
+  // ── Rendering helpers ───────────────────────────────────────────────────────
   function renderTaskCard(task) {
     return (
       <article key={task.id} className={`task-card ${task.completed ? "task-card-completed" : ""}`}>
         <div className="task-card-top">
           <h4>{task.title}</h4>
-          <label className="task-complete-control" title="Mark task complete">
+          <label className="task-complete-control" title="Mark complete">
             <input
               type="checkbox"
               className="task-complete-checkbox"
@@ -432,13 +742,26 @@ ${JSON.stringify(
     );
   }
 
+  const prevWeek = () => setCurrentWeekStart((w) => addDays(w, -7));
+  const nextWeek = () => setCurrentWeekStart((w) => addDays(w, 7));
+  const thisWeek = () => setCurrentWeekStart(getWeekStart(new Date()));
+
+  const weekLabel = (() => {
+    const end = addDays(currentWeekStart, 6);
+    const fmt  = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return `${fmt(currentWeekStart)} – ${fmt(end)}, ${end.getFullYear()}`;
+  })();
+
+  // ── JSX ─────────────────────────────────────────────────────────────────────
   return (
     <div className="app-shell">
+      {/* ── Header ── */}
       <header className="header">
         <h1>Synapse</h1>
         <p>Automated time management for students and professionals.</p>
       </header>
 
+      {/* ── Goals + Tasks panels ── */}
       <section className="controls-grid">
         <div className="panel">
           <h2>Weekly Goals</h2>
@@ -449,9 +772,7 @@ ${JSON.stringify(
               onChange={(e) => setNewGoal((p) => ({ ...p, name: e.target.value }))}
             />
             <input
-              type="number"
-              min="1"
-              placeholder="Hours/week"
+              type="number" min="1" placeholder="Hours/week"
               value={newGoal.weeklyHours}
               onChange={(e) => setNewGoal((p) => ({ ...p, weeklyHours: e.target.value }))}
             />
@@ -462,47 +783,18 @@ ${JSON.stringify(
               <li key={goal.id} className="goal-item">
                 {editingGoalId === goal.id ? (
                   <div className="goal-edit-row">
-                    <input
-                      value={editingGoal.name}
-                      onChange={(e) => setEditingGoal((prev) => ({ ...prev, name: e.target.value }))}
-                      placeholder="Goal name"
-                    />
-                    <input
-                      type="number"
-                      min="1"
-                      value={editingGoal.weeklyHours}
-                      onChange={(e) =>
-                        setEditingGoal((prev) => ({ ...prev, weeklyHours: e.target.value }))
-                      }
-                      placeholder="Hours/week"
-                    />
+                    <input value={editingGoal.name} onChange={(e) => setEditingGoal((p) => ({ ...p, name: e.target.value }))} placeholder="Goal name" />
+                    <input type="number" min="1" value={editingGoal.weeklyHours} onChange={(e) => setEditingGoal((p) => ({ ...p, weeklyHours: e.target.value }))} placeholder="Hours/week" />
                     <div className="goal-actions">
-                      <button type="button" onClick={() => saveGoalEdit(goal.id)}>
-                        Save
-                      </button>
-                      <button type="button" onClick={cancelEditingGoal}>
-                        Cancel
-                      </button>
+                      <button type="button" onClick={() => saveGoalEdit(goal.id)}>Save</button>
+                      <button type="button" onClick={cancelEditingGoal}>Cancel</button>
                     </div>
                   </div>
                 ) : (
                   <div className="goal-view-row">
-                    <span>
-                      <strong>{goal.name}</strong> - {goal.weeklyHours} hrs/week
-                    </span>
-                    <button
-                      type="button"
-                      className="edit-icon-button"
-                      onClick={() => startEditingGoal(goal)}
-                      aria-label="Edit goal"
-                      title="Edit goal"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.04a1.003 1.003 0 0 0 0-1.42l-2.5-2.5a1.003 1.003 0 0 0-1.42 0l-1.96 1.96 3.75 3.75 2.13-1.79z"
-                          fill="currentColor"
-                        />
-                      </svg>
+                    <span><strong>{goal.name}</strong> — {goal.weeklyHours} hrs/week</span>
+                    <button type="button" className="edit-icon-button" onClick={() => startEditingGoal(goal)} aria-label="Edit goal" title="Edit goal">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.04a1.003 1.003 0 0 0 0-1.42l-2.5-2.5a1.003 1.003 0 0 0-1.42 0l-1.96 1.96 3.75 3.75 2.13-1.79z" fill="currentColor" /></svg>
                     </button>
                   </div>
                 )}
@@ -515,99 +807,142 @@ ${JSON.stringify(
           <h2>To-do List</h2>
           <div className="button-row">
             <button onClick={connectGoogleTasks}>Connect Google Tasks</button>
-            <button onClick={scoreTaskImportanceWithGroq} disabled={isScoring}>
-              {isScoring ? "Scoring..." : "Score Importance"}
-            </button>
-            <button onClick={generateSuggestions} disabled={isSuggesting}>
-              {isSuggesting ? "Analyzing..." : "Generate Suggestions"}
-            </button>
+            <button onClick={scoreTaskImportanceWithGroq} disabled={isScoring}>{isScoring ? "Scoring…" : "Score Importance"}</button>
+            <button onClick={generateSuggestions} disabled={isSuggesting}>{isSuggesting ? "Analyzing…" : "Generate Suggestions"}</button>
           </div>
-
           <form onSubmit={addManualTask} className="stack-form">
-            <input
-              placeholder="Manual task title"
-              value={newTask.title}
-              onChange={(e) => setNewTask((p) => ({ ...p, title: e.target.value }))}
-            />
-            <input
-              type="date"
-              value={newTask.due}
-              onChange={(e) => setNewTask((p) => ({ ...p, due: e.target.value }))}
-            />
-            <input
-              placeholder="Notes / context"
-              value={newTask.notes}
-              onChange={(e) => setNewTask((p) => ({ ...p, notes: e.target.value }))}
-            />
+            <input placeholder="Manual task title" value={newTask.title} onChange={(e) => setNewTask((p) => ({ ...p, title: e.target.value }))} />
+            <input type="date" value={newTask.due} onChange={(e) => setNewTask((p) => ({ ...p, due: e.target.value }))} />
+            <input placeholder="Notes / context" value={newTask.notes} onChange={(e) => setNewTask((p) => ({ ...p, notes: e.target.value }))} />
             <button type="submit">Add Manual Task</button>
           </form>
           <p className="status">{status}</p>
         </div>
       </section>
 
+      {/* ── Eisenhower Matrix ── */}
       <section className="matrix-section">
         <h2>Eisenhower Matrix</h2>
         <div className="axis-shell">
           <div className="matrix-grid">
-            <div className="matrix-cell importantUrgent">
-              <div className="cell-header">Important + Urgent</div>
-              {quadrantTasks.importantUrgent.length === 0 ? (
-                <div className="empty-cell">No tasks</div>
-              ) : (
-                quadrantTasks.importantUrgent.map((task) => renderTaskCard(task))
-              )}
-            </div>
-            <div className="matrix-cell notImportantUrgent">
-              <div className="cell-header">Not Important + Urgent</div>
-              {quadrantTasks.notImportantUrgent.length === 0 ? (
-                <div className="empty-cell">No tasks</div>
-              ) : (
-                quadrantTasks.notImportantUrgent.map((task) => renderTaskCard(task))
-              )}
-            </div>
-            <div className="matrix-cell importantNotUrgent">
-              <div className="cell-header">Important + Not Urgent</div>
-              {quadrantTasks.importantNotUrgent.length === 0 ? (
-                <div className="empty-cell">No tasks</div>
-              ) : (
-                quadrantTasks.importantNotUrgent.map((task) => renderTaskCard(task))
-              )}
-            </div>
-            <div className="matrix-cell notImportantNotUrgent">
-              <div className="cell-header">Not Important + Not Urgent</div>
-              {quadrantTasks.notImportantNotUrgent.length === 0 ? (
-                <div className="empty-cell">No tasks</div>
-              ) : (
-                quadrantTasks.notImportantNotUrgent.map((task) => renderTaskCard(task))
-              )}
-            </div>
+            {[
+              { key: "importantUrgent",       label: "Important + Urgent" },
+              { key: "notImportantUrgent",    label: "Not Important + Urgent" },
+              { key: "importantNotUrgent",    label: "Important + Not Urgent" },
+              { key: "notImportantNotUrgent", label: "Not Important + Not Urgent" },
+            ].map(({ key, label }) => (
+              <div key={key} className={`matrix-cell ${key}`}>
+                <div className="cell-header">{label}</div>
+                {quadrantTasks[key].length === 0
+                  ? <div className="empty-cell">No tasks</div>
+                  : quadrantTasks[key].map((t) => renderTaskCard(t))}
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
+      {/* ── Weekly Calendar ── */}
+      <section className="calendar-section">
+        <h2>Weekly Calendar</h2>
+
+        {/* Controls bar */}
+        <div className="cal-controls">
+          <div className="cal-nav">
+            <button onClick={prevWeek} title="Previous week">‹</button>
+            <span className="cal-week-label">{weekLabel}</span>
+            <button onClick={nextWeek} title="Next week">›</button>
+            <button className="btn-ghost btn-small" onClick={thisWeek}>Today</button>
+          </div>
+          <div className="cal-actions">
+            <button onClick={connectGoogleCalendar} disabled={isSyncingCal}>
+              {isSyncingCal ? "Syncing…" : "⟳ Sync Google Calendar"}
+            </button>
+            <button
+              onClick={generateCalendarSuggestions}
+              disabled={isGenCalSug}
+              title="AI will find gaps and suggest where to schedule your top tasks"
+            >
+              {isGenCalSug ? "Analyzing…" : "✨ Suggest Schedule"}
+            </button>
+          </div>
+        </div>
+
+        <p className="status">{calendarStatus}</p>
+
+        {/* Legend */}
+        <div className="cal-legend">
+          <span className="legend-dot" style={{ background: EVENT_COLORS.google.bg }} /> Google Calendar
+          <span className="legend-dot" style={{ background: EVENT_COLORS.manual.bg }} /> Manual event
+          <span className="legend-dot" style={{ background: EVENT_COLORS.suggested.bg }} /> AI suggestion — click + Add to lock in
+        </div>
+
+        {/* Calendar grid */}
+        <WeeklyCalendar
+          weekStart={currentWeekStart}
+          calendarEvents={calendarEvents}
+          suggestions={calSuggestions}
+          onSlotClick={handleSlotClick}
+          onAddSuggestion={addSuggestionToCalendar}
+        />
+
+        {/* Scheduling suggestions list (below grid) */}
+        {calSuggestions.length > 0 && (
+          <div className="sug-list-panel">
+            <h3>✨ AI Scheduling Suggestions</h3>
+            <p className="status">{calSugStatus}</p>
+            <div className="sug-list">
+              {calSuggestions.map((s, i) => {
+                const dayDate = addDays(currentWeekStart, s.day);
+                const dayLabel = formatDayHeader(dayDate);
+                return (
+                  <div key={i} className="sug-card">
+                    <div className="sug-card-body">
+                      <strong>{s.taskTitle}</strong>
+                      <span className="sug-time">{dayLabel} · {minutesToDisplay(s.startMinute)} – {minutesToDisplay(s.endMinute)}</span>
+                      <span className="sug-reason">{s.reason}</span>
+                    </div>
+                    <button className="btn-accent" onClick={() => addSuggestionToCalendar(s)}>+ Add to Calendar</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {calSugStatus && calSuggestions.length === 0 && (
+          <p className="status">{calSugStatus}</p>
+        )}
+      </section>
+
+      {/* ── Existing suggestions panel ── */}
       <section className="suggestions">
-        <h2>Suggestions & Alerts</h2>
+        <h2>Suggestions &amp; Alerts</h2>
         <textarea readOnly value={suggestionText} rows={7} />
       </section>
+
+      {/* ── Add-event modal ── */}
+      {addEventSlot && (
+        <AddEventModal
+          slot={addEventSlot}
+          onConfirm={confirmAddEvent}
+          onCancel={() => setAddEventSlot(null)}
+        />
+      )}
     </div>
   );
 }
 
+// ─── Local suggestion fallback (existing) ─────────────────────────────────────
 function buildLocalSuggestion(scoredTasks, goals, quadrantCounts) {
-  const totalGoalHours = goals.reduce((sum, goal) => sum + Number(goal.weeklyHours || 0), 0);
-  const highPriorityTasks = scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
-  const lowLow = quadrantCounts.notImportantNotUrgent;
+  const totalGoalHours  = goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
+  const highPriority    = scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
+  const lowLow          = quadrantCounts.notImportantNotUrgent;
 
-  if (totalGoalHours > 50) {
-    return `Alert: you allotted ${totalGoalHours} hours this week, which may be unrealistic. Consider moving lower priority tasks to next week.`;
-  }
-  if (lowLow > highPriorityTasks) {
-    return "Alert: you have more tasks in the not important / not urgent zone than in your top-priority zone. Consider eliminating or deferring some tasks.";
-  }
-  if (highPriorityTasks === 0) {
-    return "Alert: no tasks are currently both important and urgent. Double-check whether your due dates and goal alignment are accurate.";
-  }
-  return "Great todo list, this aligns well with your weekly goals. Keep momentum on important and urgent tasks first.";
+  if (totalGoalHours > 50)      return `Alert: you allotted ${totalGoalHours} hours this week, which may be unrealistic. Consider moving lower priority tasks to next week.`;
+  if (lowLow > highPriority)    return "Alert: you have more tasks in the not important / not urgent zone than in your top-priority zone. Consider eliminating or deferring some.";
+  if (highPriority === 0)       return "Alert: no tasks are currently both important and urgent. Double-check due dates and goal alignment.";
+  return "Great todo list — this aligns well with your weekly goals. Keep momentum on important and urgent tasks first.";
 }
 
 export default App;
