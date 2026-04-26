@@ -243,6 +243,57 @@ li {
   border-color: rgba(134, 239, 172, 0.8);
 }
 
+/* ── Task notes tooltip ──────────────────────────────────────────────────────── */
+.task-card-has-notes {
+  position: relative;
+}
+
+.task-notes-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(99, 179, 237, 0.55);
+  backdrop-filter: blur(8px);
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  padding: 7px 10px;
+  border-radius: 8px;
+  white-space: normal;
+  width: max-content;
+  max-width: 220px;
+  z-index: 50;
+  pointer-events: none;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  transform: translateX(-50%) translateY(4px);
+}
+
+/* Arrow pointing down */
+.task-notes-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: rgba(99, 179, 237, 0.55);
+}
+
+.task-notes-tooltip-icon {
+  margin-right: 5px;
+}
+
+.task-card-has-notes:hover .task-notes-tooltip {
+  display: block;
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .task-card-completed h4,
 .task-card-completed p {
   color: #bbf7d0;

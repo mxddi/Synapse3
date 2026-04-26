@@ -857,7 +857,12 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
   // ── Rendering helpers ───────────────────────────────────────────────────────
   function renderTaskCard(task) {
     return (
-      <article key={task.id} className={`task-card ${task.completed ? "task-card-completed" : ""}`}>
+      <article key={task.id} className={`task-card ${task.completed ? "task-card-completed" : ""} ${task.notes ? "task-card-has-notes" : ""}`}>
+        {task.notes && (
+          <div className="task-notes-tooltip">
+            {task.notes}
+          </div>
+        )}
         <div className="task-card-top">
           <h4>{task.title}</h4>
           <label className="task-complete-control" title="Mark complete">
