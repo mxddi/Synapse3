@@ -105,7 +105,7 @@ function App() {
       ...t,
       source: "mock",
       urgency: urgencyScoreFromDueDate(t.due),
-      importance: 2,
+      importance: 3,
       completed: false,
     }))
   );
@@ -225,7 +225,7 @@ function App() {
         notes: newTask.notes.trim(),
         source: "manual",
         urgency: urgencyScoreFromDueDate(newTask.due),
-        importance: 2,
+        importance: 3,
         completed: false,
       },
     ]);
@@ -291,7 +291,7 @@ function App() {
             due: task.due || null,
             notes: task.notes || "",
             source: "google",
-            importance: 2,
+            importance: 3,
             urgency: urgencyScoreFromDueDate(task.due),
             completed: false,
           });
@@ -318,7 +318,13 @@ function App() {
 
     const apiKey = process.env.REACT_APP_GROQ_KEY;
     if (!apiKey) {
-      setStatus("Missing REACT_APP_GROQ_KEY in your environment.");
+      setTasks((prev) =>
+        prev.map((task) => ({
+          ...task,
+          importance: buildFallbackImportance(task, goals),
+        }))
+      );
+      setStatus("Groq key not set. Used local importance scoring.");
       return;
     }
 
@@ -371,7 +377,8 @@ Rules:
     const fallback = buildLocalSuggestion(scoredTasks, goals, quadrantCounts);
 
     if (!apiKey) {
-      setSuggestionText(`${fallback}\n\n(Set REACT_APP_GROQ_KEY for AI suggestions.)`);
+      setSuggestionText(`${fallback}\n\n(Local suggestion mode: set REACT_APP_GROQ_KEY to enable AI suggestions.)`);
+      setStatus("Groq key not set. Showing local suggestions.");
       return;
     }
 
