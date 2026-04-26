@@ -383,7 +383,11 @@ function App() {
   const [goals, setGoals] = useState(mockGoals);
   const [tasks, setTasks] = useState(
     mockTasks.map((t) => ({
-      ...t, source: "mock", urgency: urgencyScoreFromDueDate(t.due), importance: 2, completed: false,
+      ...t,
+      source: "mock",
+      urgency: urgencyScoreFromDueDate(t.due),
+      importance: 3,
+      completed: false,
     }))
   );
   const [newGoal, setNewGoal] = useState({ name: "", weeklyHours: "" });
@@ -475,11 +479,19 @@ function App() {
   function addManualTask(event) {
     event.preventDefault();
     if (!newTask.title.trim()) return;
-    setTasks((prev) => [...prev, {
-      id: `m-${Date.now()}`, title: newTask.title.trim(), due: newTask.due || null,
-      notes: newTask.notes.trim(), source: "manual", urgency: urgencyScoreFromDueDate(newTask.due),
-      importance: 2, completed: false,
-    }]);
+    setTasks((prev) => [
+      ...prev,
+      {
+        id: `m-${Date.now()}`,
+        title: newTask.title.trim(),
+        due: newTask.due || null,
+        notes: newTask.notes.trim(),
+        source: "manual",
+        urgency: urgencyScoreFromDueDate(newTask.due),
+        importance: 3,
+        completed: false,
+      },
+    ]);
     setStatus("Manual task added.");
     setNewTask({ title: "", due: "", notes: "" });
   }
@@ -521,11 +533,18 @@ function App() {
           `https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false&maxResults=100`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        if (!res.ok) continue;
-        ((await res.json()).items || []).forEach((t) => {
-          all.push({
-            id: t.id, title: t.title || "Untitled", due: t.due || null, notes: t.notes || "",
-            source: "google", importance: 2, urgency: urgencyScoreFromDueDate(t.due), completed: false
+        if (!tasksRes.ok) continue;
+        const tasksData = await tasksRes.json();
+        (tasksData.items || []).forEach((task) => {
+          allTasks.push({
+            id: task.id,
+            title: task.title || "Untitled task",
+            due: task.due || null,
+            notes: task.notes || "",
+            source: "google",
+            importance: 3,
+            urgency: urgencyScoreFromDueDate(task.due),
+            completed: false,
           });
         });
       }
@@ -632,9 +651,13 @@ function App() {
     const fallback = buildLocalCalSuggestions(busyByDay, prioritized);
 
     if (!apiKey) {
-      setCalSuggestions(fallback);
-      setCalSugStatus("Showing local suggestions. Add REACT_APP_GROQ_KEY for AI-powered scheduling.");
-      setIsGenCalSug(false);
+      setTasks((prev) =>
+        prev.map((task) => ({
+          ...task,
+          importance: buildFallbackImportance(task, goals),
+        }))
+      );
+      setStatus("Groq key not set. Used local importance scoring.");
       return;
     }
 
@@ -786,7 +809,12 @@ Rules: Score importance 1-4 by goal alignment. 4=strongly aligned this week; 1=w
   async function generateSuggestions() {
     const apiKey = process.env.REACT_APP_GROQ_KEY;
     const fallback = buildLocalSuggestion(scoredTasks, goals, quadrantCounts);
-    if (!apiKey) { setSuggestionText(`${fallback}\n\n(Set REACT_APP_GROQ_KEY for AI suggestions.)`); return; }
+
+    if (!apiKey) {
+      setSuggestionText(`${fallback}\n\n(Local suggestion mode: set REACT_APP_GROQ_KEY to enable AI suggestions.)`);
+      setStatus("Groq key not set. Showing local suggestions.");
+      return;
+    }
 
     setIsSuggesting(true);
     try {
