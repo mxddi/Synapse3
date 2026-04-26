@@ -1,33 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Google API scopes ────────────────────────────────────────────────────────
-const GOOGLE_TASKS_SCOPE    = "https://www.googleapis.com/auth/tasks.readonly";
+const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
-const GROQ_ENDPOINT         = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── Calendar display constants ───────────────────────────────────────────────
 const CAL_START_HOUR = 6;   // 6 AM
-const CAL_END_HOUR   = 22;  // 10 PM
-const HOUR_PX        = 64;  // px per hour in the grid
+const CAL_END_HOUR = 22;  // 10 PM
+const HOUR_PX = 64;  // px per hour in the grid
 
 const EVENT_COLORS = {
-  google:    { bg: "#4285F4", text: "#fff" },
-  manual:    { bg: "#34A853", text: "#fff" },
+  google: { bg: "#4285F4", text: "#fff" },
+  manual: { bg: "#34A853", text: "#fff" },
   suggested: { bg: "#FBBC05", text: "#1a1a1a" },
 };
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
 const mockGoals = [
   { id: "g1", name: "Prepare for data structures exam", weeklyHours: 8 },
-  { id: "g2", name: "Finish product demo deck",         weeklyHours: 5 },
-  { id: "g3", name: "Exercise and sleep consistency",   weeklyHours: 4 },
+  { id: "g2", name: "Finish product demo deck", weeklyHours: 5 },
+  { id: "g3", name: "Exercise and sleep consistency", weeklyHours: 4 },
 ];
 
 const mockTasks = [
-  { id: "t1", title: "Review binary trees notes", due: inDays(1),  notes: "study"          },
-  { id: "t2", title: "Design slides for demo",    due: inDays(3),  notes: "work project"   },
-  { id: "t3", title: "Book dentist appointment",  due: inDays(9),  notes: "personal admin" },
-  { id: "t4", title: "Watch random YouTube",      due: inDays(14), notes: "optional"       },
+  { id: "t1", title: "Review binary trees notes", due: inDays(1), notes: "study" },
+  { id: "t2", title: "Design slides for demo", due: inDays(3), notes: "work project" },
+  { id: "t3", title: "Book dentist appointment", due: inDays(9), notes: "personal admin" },
+  { id: "t4", title: "Watch random YouTube", due: inDays(14), notes: "optional" },
 ];
 
 function inDays(days) {
@@ -40,18 +40,18 @@ function inDays(days) {
 function urgencyScoreFromDueDate(dueDate) {
   if (!dueDate) return 1;
   const days = (new Date(dueDate) - new Date()) / (1000 * 60 * 60 * 24);
-  if (days <= 0)  return 4;
-  if (days <= 2)  return 4;
-  if (days <= 5)  return 3;
+  if (days <= 0) return 4;
+  if (days <= 2) return 4;
+  if (days <= 5) return 3;
   if (days <= 10) return 2;
   return 1;
 }
 
 function getQuadrant(importance, urgency) {
   const hi = importance >= 3, hu = urgency >= 3;
-  if (hi && hu)   return "importantUrgent";
-  if (!hi && hu)  return "notImportantUrgent";
-  if (hi && !hu)  return "importantNotUrgent";
+  if (hi && hu) return "importantUrgent";
+  if (!hi && hu) return "notImportantUrgent";
+  if (hi && !hu) return "importantNotUrgent";
   return "notImportantNotUrgent";
 }
 
@@ -103,26 +103,47 @@ function minutesToTimeInput(minutes) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+function normalizeAndLimitSuggestions(rawSuggestions, busyByDay) {
+  return (Array.isArray(rawSuggestions) ? rawSuggestions : [])
+    .map((s) => ({
+      ...s,
+      day: Number(s.day),
+      startMinute: Number(s.startMinute),
+      endMinute: Number(s.endMinute),
+      taskTitle: String(s.taskTitle || "Untitled task"),
+      reason: String(s.reason || "Scheduled by AI."),
+    }))
+    .filter((s) => Number.isInteger(s.day) && s.day >= 0 && s.day <= 6)
+    .filter((s) => Number.isFinite(s.startMinute) && Number.isFinite(s.endMinute))
+    .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60)
+    .filter((s) => s.startMinute < s.endMinute)
+    .filter((s) => {
+      const blocks = busyByDay[s.day] || [];
+      return !blocks.some((b) => s.startMinute < b.endMinute && s.endMinute > b.startMinute);
+    })
+    .slice(0, 6);
+}
+
 function calendarEventFromGoogleEvent(gEvent, weekStart) {
   const start = gEvent.start?.dateTime || gEvent.start?.date;
-  const end   = gEvent.end?.dateTime   || gEvent.end?.date;
+  const end = gEvent.end?.dateTime || gEvent.end?.date;
   if (!start || !end) return null;
 
   const startDate = new Date(start);
-  const endDate   = new Date(end);
-  const ws        = new Date(weekStart);
+  const endDate = new Date(end);
+  const ws = new Date(weekStart);
   ws.setHours(0, 0, 0, 0);
 
   const diffDays = Math.floor((startDate - ws) / (1000 * 60 * 60 * 24));
   if (diffDays < 0 || diffDays > 6) return null;
 
   return {
-    id:          gEvent.id,
-    title:       gEvent.summary || "Busy",
-    day:         diffDays,
+    id: gEvent.id,
+    title: gEvent.summary || "Busy",
+    day: diffDays,
     startMinute: startDate.getHours() * 60 + startDate.getMinutes(),
-    endMinute:   endDate.getHours()   * 60 + endDate.getMinutes(),
-    source:      "google",
+    endMinute: endDate.getHours() * 60 + endDate.getMinutes(),
+    source: "google",
   };
 }
 
@@ -136,7 +157,7 @@ async function fetchGroqJson(promptText, apiKey) {
       temperature: 0.2,
       messages: [
         { role: "system", content: "You output strict minified JSON only." },
-        { role: "user",   content: promptText },
+        { role: "user", content: promptText },
       ],
     }),
   });
@@ -144,17 +165,17 @@ async function fetchGroqJson(promptText, apiKey) {
     const text = await response.text();
     throw new Error(`Groq error ${response.status}: ${text}`);
   }
-  const data    = await response.json();
+  const data = await response.json();
   const content = data.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error("Groq returned empty content.");
   return JSON.parse(content);
 }
 
 // ─── Sub-component: WeeklyCalendar ───────────────────────────────────────────
-function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, onAddSuggestion }) {
-  const hours     = [];
+function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, onAddSuggestion, onRemoveSuggestion }) {
+  const hours = [];
   for (let h = CAL_START_HOUR; h < CAL_END_HOUR; h++) hours.push(h);
-  const totalPx   = hours.length * HOUR_PX;
+  const totalPx = hours.length * HOUR_PX;
   const dayLabels = Array.from({ length: 7 }, (_, i) => formatDayHeader(addDays(weekStart, i)));
 
   function minuteToY(minute) {
@@ -163,8 +184,8 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
   }
 
   function handleColumnClick(e, dayIndex) {
-    const rect   = e.currentTarget.getBoundingClientRect();
-    const rawY   = e.clientY - rect.top;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rawY = e.clientY - rect.top;
     const minute = Math.round(((rawY / HOUR_PX) * 60 + CAL_START_HOUR * 60) / 15) * 15;
     const clamped = Math.max(CAL_START_HOUR * 60, Math.min((CAL_END_HOUR - 1) * 60, minute));
     onSlotClick(dayIndex, clamped);
@@ -227,7 +248,7 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
 
               {/* Calendar events */}
               {dayEvents[dayIdx].map((ev) => {
-                const top    = minuteToY(ev.startMinute);
+                const top = minuteToY(ev.startMinute);
                 const height = Math.max(20, minuteToY(ev.endMinute) - top);
                 const colors = EVENT_COLORS[ev.source] || EVENT_COLORS.manual;
                 return (
@@ -248,7 +269,7 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
 
               {/* AI suggested slots */}
               {daySuggestions[dayIdx].map((s, i) => {
-                const top    = minuteToY(s.startMinute);
+                const top = minuteToY(s.startMinute);
                 const height = Math.max(24, minuteToY(s.endMinute) - top);
                 return (
                   <div
@@ -269,6 +290,14 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
                     >
                       + Add
                     </button>
+                    <button
+                      className="cal-sug-add-btn cal-sug-dismiss-btn"
+                      onClick={() => onRemoveSuggestion(s)}
+                      title="Dismiss this suggestion"
+                    >
+                      ✕
+                    </button>
+
                   </div>
                 );
               })}
@@ -282,23 +311,23 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
 
 // ─── Sub-component: AddEventModal ─────────────────────────────────────────────
 function AddEventModal({ slot, onConfirm, onCancel }) {
-  const [title, setTitle]       = useState("");
-  const [startTime, setStart]   = useState(minutesToTimeInput(slot.startMinute));
-  const [endTime, setEnd]       = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
+  const [title, setTitle] = useState("");
+  const [startTime, setStart] = useState(minutesToTimeInput(slot.startMinute));
+  const [endTime, setEnd] = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
 
   function handleConfirm() {
     if (!title.trim()) return;
     onConfirm({
-      title:       title.trim(),
-      day:         slot.day,
+      title: title.trim(),
+      day: slot.day,
       startMinute: timeStringToMinutes(startTime),
-      endMinute:   timeStringToMinutes(endTime),
+      endMinute: timeStringToMinutes(endTime),
     });
   }
 
-  const weekStart   = getWeekStart(new Date());
-  const dayDate     = addDays(weekStart, slot.day);
-  const dayLabel    = formatDayHeader(dayDate);
+  const weekStart = getWeekStart(new Date());
+  const dayDate = addDays(weekStart, slot.day);
+  const dayLabel = formatDayHeader(dayDate);
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
@@ -334,42 +363,42 @@ function AddEventModal({ slot, onConfirm, onCancel }) {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function App() {
   // ── existing state ──────────────────────────────────────────────────────────
-  const [goals, setGoals]                   = useState(mockGoals);
-  const [tasks, setTasks]                   = useState(
+  const [goals, setGoals] = useState(mockGoals);
+  const [tasks, setTasks] = useState(
     mockTasks.map((t) => ({
       ...t, source: "mock", urgency: urgencyScoreFromDueDate(t.due), importance: 2, completed: false,
     }))
   );
-  const [newGoal, setNewGoal]               = useState({ name: "", weeklyHours: "" });
-  const [editingGoalId, setEditingGoalId]   = useState(null);
-  const [editingGoal, setEditingGoal]       = useState({ name: "", weeklyHours: "" });
-  const [newTask, setNewTask]               = useState({ title: "", due: "", notes: "" });
-  const [status, setStatus]                 = useState("Using mock data. Connect Google Tasks or add tasks manually.");
-  const [isScoring, setIsScoring]           = useState(false);
+  const [newGoal, setNewGoal] = useState({ name: "", weeklyHours: "" });
+  const [editingGoalId, setEditingGoalId] = useState(null);
+  const [editingGoal, setEditingGoal] = useState({ name: "", weeklyHours: "" });
+  const [newTask, setNewTask] = useState({ title: "", due: "", notes: "" });
+  const [status, setStatus] = useState("Using mock data. Connect Google Tasks or add tasks manually.");
+  const [isScoring, setIsScoring] = useState(false);
   const [suggestionText, setSuggestionText] = useState("Suggestions will appear here after scoring your tasks.");
-  const [isSuggesting, setIsSuggesting]     = useState(false);
+  const [isSuggesting, setIsSuggesting] = useState(false);
   const [tokenClientReady, setTokenClientReady] = useState(false);
   const [googleTokenClient, setGoogleTokenClient] = useState(null);
 
   // ── calendar state ──────────────────────────────────────────────────────────
-  const [calendarEvents, setCalendarEvents]         = useState([]);
-  const [calendarStatus, setCalendarStatus]         = useState("Connect Google Calendar or click a time slot to add events.");
-  const [isSyncingCal, setIsSyncingCal]             = useState(false);
-  const [calTokenClient, setCalTokenClient]         = useState(null);
-  const [currentWeekStart, setCurrentWeekStart]     = useState(() => getWeekStart(new Date()));
-  const [addEventSlot, setAddEventSlot]             = useState(null);  // {day, startMinute} or null
-  const [calSuggestions, setCalSuggestions]         = useState([]);
-  const [isGenCalSug, setIsGenCalSug]               = useState(false);
-  const [calSugStatus, setCalSugStatus]             = useState("");
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [calendarStatus, setCalendarStatus] = useState("Connect Google Calendar or click a time slot to add events.");
+  const [isSyncingCal, setIsSyncingCal] = useState(false);
+  const [calTokenClient, setCalTokenClient] = useState(null);
+  const [currentWeekStart, setCurrentWeekStart] = useState(() => getWeekStart(new Date()));
+  const [addEventSlot, setAddEventSlot] = useState(null);  // {day, startMinute} or null
+  const [calSuggestions, setCalSuggestions] = useState([]);
+  const [isGenCalSug, setIsGenCalSug] = useState(false);
+  const [calSugStatus, setCalSugStatus] = useState("");
   let calEventIdCounter = useRef(1000);
 
   // ── load Google Identity script ─────────────────────────────────────────────
   useEffect(() => {
-    const script    = document.createElement("script");
-    script.src      = "https://accounts.google.com/gsi/client";
-    script.async    = true;
-    script.defer    = true;
-    script.onload   = () => setTokenClientReady(true);
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setTokenClientReady(true);
     document.body.appendChild(script);
     return () => document.body.removeChild(script);
   }, []);
@@ -378,7 +407,7 @@ function App() {
   const scoredTasks = useMemo(
     () => tasks.map((t) => ({
       ...t,
-      urgency:  urgencyScoreFromDueDate(t.due),
+      urgency: urgencyScoreFromDueDate(t.due),
       quadrant: getQuadrant(t.importance, urgencyScoreFromDueDate(t.due)),
     })),
     [tasks]
@@ -462,7 +491,7 @@ function App() {
   async function loadGoogleTasks(accessToken) {
     try {
       setStatus("Loading Google Tasks...");
-      const listsRes  = await fetch("https://tasks.googleapis.com/tasks/v1/users/@me/lists", {
+      const listsRes = await fetch("https://tasks.googleapis.com/tasks/v1/users/@me/lists", {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!listsRes.ok) throw new Error(`Lists request failed: ${listsRes.status}`);
@@ -476,8 +505,10 @@ function App() {
         );
         if (!res.ok) continue;
         ((await res.json()).items || []).forEach((t) => {
-          all.push({ id: t.id, title: t.title || "Untitled", due: t.due || null, notes: t.notes || "",
-            source: "google", importance: 2, urgency: urgencyScoreFromDueDate(t.due), completed: false });
+          all.push({
+            id: t.id, title: t.title || "Untitled", due: t.due || null, notes: t.notes || "",
+            source: "google", importance: 2, urgency: urgencyScoreFromDueDate(t.due), completed: false
+          });
         });
       }
       if (!all.length) { setStatus("Connected but no active tasks found."); return; }
@@ -510,11 +541,11 @@ function App() {
     setIsSyncingCal(true);
     setCalendarStatus("Loading Google Calendar events...");
     try {
-      const weekEnd  = addDays(currentWeekStart, 7);
-      const timeMin  = currentWeekStart.toISOString();
-      const timeMax  = weekEnd.toISOString();
-      const url      = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=100`;
-      const res      = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      const weekEnd = addDays(currentWeekStart, 7);
+      const timeMin = currentWeekStart.toISOString();
+      const timeMax = weekEnd.toISOString();
+      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=100`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!res.ok) throw new Error(`Calendar request failed: ${res.status}`);
       const items = (await res.json()).items || [];
 
@@ -542,12 +573,12 @@ function App() {
 
   function confirmAddEvent({ title, day, startMinute, endMinute }) {
     const newEv = {
-      id:          `cal-${calEventIdCounter.current++}`,
+      id: `cal-${calEventIdCounter.current++}`,
       title,
       day,
       startMinute,
-      endMinute:   endMinute > startMinute ? endMinute : startMinute + 60,
-      source:      "manual",
+      endMinute: endMinute > startMinute ? endMinute : startMinute + 60,
+      source: "manual",
     };
     setCalendarEvents((prev) => [...prev, newEv]);
     setCalendarStatus("Manual event added.");
@@ -596,7 +627,7 @@ function App() {
       }));
 
       const prompt = `
-You are a scheduling assistant. Return ONLY strict minified JSON in this exact shape:
+You are a scheduling assistant. Follow this exactly! Return ONLY strict minified JSON in this exact shape:
 {"suggestions":[{"taskId":"string","taskTitle":"string","day":0,"startMinute":540,"endMinute":660,"reason":"short sentence"}]}
 
 Rules:
@@ -605,6 +636,7 @@ Rules:
 - Only schedule between ${CAL_START_HOUR * 60} (${CAL_START_HOUR}AM) and ${CAL_END_HOUR * 60} (${CAL_END_HOUR === 12 ? "12PM" : `${CAL_END_HOUR - 12}PM`})
 - Never overlap with existing busy blocks
 - Higher importance/urgency tasks get earlier and longer slots
+- Apply human-centered scheduling: do not front-load everything at the start of the day or week; spread work realistically, include buffer time for travel/context-switching, and avoid common meal windows (roughly 12:00-1:00 PM and 6:00-7:00 PM) unless necessary.
 - Provide at most 6 suggestions total
 
 Current busy blocks this week:
@@ -615,9 +647,7 @@ ${JSON.stringify(prioritized)}
 `;
 
       const parsed = await fetchGroqJson(prompt, apiKey);
-      const sug    = (parsed.suggestions || []).filter(
-        (s) => typeof s.day === "number" && s.startMinute < s.endMinute
-      );
+      const sug = normalizeAndLimitSuggestions(parsed.suggestions, busyByDay);
       if (sug.length === 0) throw new Error("No valid suggestions returned.");
       setCalSuggestions(sug);
       setCalSugStatus(`${sug.length} scheduling suggestion${sug.length !== 1 ? "s" : ""} ready. Click "+ Add" on any to lock it in.`);
@@ -631,16 +661,19 @@ ${JSON.stringify(prioritized)}
 
   function buildLocalCalSuggestions(busyByDay, prioritized) {
     const suggestions = [];
-    const usedSlots   = busyByDay.map((blocks) => [...blocks]); // copy
+    const usedSlots = busyByDay.map((blocks) => [...blocks]); // copy
 
-    for (const task of prioritized) {
-      const duration   = task.importance >= 3 ? 90 : 60; // minutes
-      const startSearch = task.urgency >= 3 ? 1 : 3; // prefer earlier days for urgent tasks
+  for (let taskIndex = 0; taskIndex < prioritized.length; taskIndex++) {
+    const task = prioritized[taskIndex];
+      const duration = task.importance >= 3 ? 90 : 60; // minutes
       let placed = false;
+    const preferredStart = task.urgency >= 3 ? 1 : 3; // urgent tasks still start earlier in week
+    const dayOrder = Array.from({ length: 7 }, (_, i) => (preferredStart + taskIndex + i) % 7);
 
-      for (let di = startSearch; di < 7 && !placed; di++) {
+    for (const di of dayOrder) {
+      if (placed) break;
         for (let start = CAL_START_HOUR * 60; start + duration <= CAL_END_HOUR * 60; start += 30) {
-          const end     = start + duration;
+          const end = start + duration;
           const overlaps = usedSlots[di].some((b) => start < b.endMinute && end > b.startMinute);
           if (!overlaps) {
             suggestions.push({ taskId: task.id, taskTitle: task.title, day: di, startMinute: start, endMinute: end, reason: `Scheduled for ${task.quadrant}.` });
@@ -651,17 +684,22 @@ ${JSON.stringify(prioritized)}
       }
       if (suggestions.length >= 6) break;
     }
-    return suggestions;
+  return normalizeAndLimitSuggestions(suggestions, busyByDay);
+  }
+
+  function deleteSuggestionFromCalendar(suggestion) {
+    setCalSuggestions((prev) => prev.filter((s) => s !== suggestion));
+    setCalSugStatus("Suggestion removed from calendar.");
   }
 
   function addSuggestionToCalendar(suggestion) {
     const newEv = {
-      id:          `cal-${calEventIdCounter.current++}`,
-      title:       suggestion.taskTitle,
-      day:         suggestion.day,
+      id: `cal-${calEventIdCounter.current++}`,
+      title: suggestion.taskTitle,
+      day: suggestion.day,
       startMinute: suggestion.startMinute,
-      endMinute:   suggestion.endMinute,
-      source:      "manual",
+      endMinute: suggestion.endMinute,
+      source: "manual",
     };
     setCalendarEvents((prev) => [...prev, newEv]);
     setCalSuggestions((prev) => prev.filter((s) => s !== suggestion));
@@ -684,7 +722,7 @@ Tasks: ${JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, due: t.due
 Rules: Score importance 1-4 by goal alignment. 4=strongly aligned this week; 1=weak/none. Include every task ID.
 `;
       const parsed = await fetchGroqJson(prompt, apiKey);
-      const map    = new Map((parsed.scores || []).map((s) => [s.taskId, Number(s.importance)]));
+      const map = new Map((parsed.scores || []).map((s) => [s.taskId, Number(s.importance)]));
       setTasks((prev) =>
         prev.map((t) => ({
           ...t,
@@ -701,7 +739,7 @@ Rules: Score importance 1-4 by goal alignment. 4=strongly aligned this week; 1=w
   }
 
   async function generateSuggestions() {
-    const apiKey  = process.env.REACT_APP_GROQ_KEY;
+    const apiKey = process.env.REACT_APP_GROQ_KEY;
     const fallback = buildLocalSuggestion(scoredTasks, goals, quadrantCounts);
     if (!apiKey) { setSuggestionText(`${fallback}\n\n(Set REACT_APP_GROQ_KEY for AI suggestions.)`); return; }
 
@@ -748,9 +786,13 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
 
   const weekLabel = (() => {
     const end = addDays(currentWeekStart, 6);
-    const fmt  = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const fmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     return `${fmt(currentWeekStart)} – ${fmt(end)}, ${end.getFullYear()}`;
   })();
+  const safeCalSuggestions = useMemo(
+    () => normalizeAndLimitSuggestions(calSuggestions, Array.from({ length: 7 }, () => [])),
+    [calSuggestions]
+  );
 
   // ── JSX ─────────────────────────────────────────────────────────────────────
   return (
@@ -826,9 +868,9 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         <div className="axis-shell">
           <div className="matrix-grid">
             {[
-              { key: "importantUrgent",       label: "Important + Urgent" },
-              { key: "notImportantUrgent",    label: "Not Important + Urgent" },
-              { key: "importantNotUrgent",    label: "Important + Not Urgent" },
+              { key: "importantUrgent", label: "Important + Urgent" },
+              { key: "notImportantUrgent", label: "Not Important + Urgent" },
+              { key: "importantNotUrgent", label: "Important + Not Urgent" },
               { key: "notImportantNotUrgent", label: "Not Important + Not Urgent" },
             ].map(({ key, label }) => (
               <div key={key} className={`matrix-cell ${key}`}>
@@ -881,18 +923,19 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         <WeeklyCalendar
           weekStart={currentWeekStart}
           calendarEvents={calendarEvents}
-          suggestions={calSuggestions}
+          suggestions={safeCalSuggestions}
           onSlotClick={handleSlotClick}
           onAddSuggestion={addSuggestionToCalendar}
+          onRemoveSuggestion={deleteSuggestionFromCalendar}
         />
 
         {/* Scheduling suggestions list (below grid) */}
-        {calSuggestions.length > 0 && (
+        {safeCalSuggestions.length > 0 && (
           <div className="sug-list-panel">
             <h3>✨ AI Scheduling Suggestions</h3>
             <p className="status">{calSugStatus}</p>
             <div className="sug-list">
-              {calSuggestions.map((s, i) => {
+              {safeCalSuggestions.map((s, i) => {
                 const dayDate = addDays(currentWeekStart, s.day);
                 const dayLabel = formatDayHeader(dayDate);
                 return (
@@ -902,7 +945,10 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
                       <span className="sug-time">{dayLabel} · {minutesToDisplay(s.startMinute)} – {minutesToDisplay(s.endMinute)}</span>
                       <span className="sug-reason">{s.reason}</span>
                     </div>
-                    <button className="btn-accent" onClick={() => addSuggestionToCalendar(s)}>+ Add to Calendar</button>
+                    <div className="sug-card-actions">
+                      <button className="btn-accent" onClick={() => addSuggestionToCalendar(s)}>+ Add</button>
+                      <button className="btn-dismiss" onClick={() => deleteSuggestionFromCalendar(s)} title="Dismiss suggestion">✕</button>
+                    </div>
                   </div>
                 );
               })}
@@ -910,7 +956,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
           </div>
         )}
 
-        {calSugStatus && calSuggestions.length === 0 && (
+        {calSugStatus && safeCalSuggestions.length === 0 && (
           <p className="status">{calSugStatus}</p>
         )}
       </section>
@@ -935,13 +981,13 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
 
 // ─── Local suggestion fallback (existing) ─────────────────────────────────────
 function buildLocalSuggestion(scoredTasks, goals, quadrantCounts) {
-  const totalGoalHours  = goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
-  const highPriority    = scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
-  const lowLow          = quadrantCounts.notImportantNotUrgent;
+  const totalGoalHours = goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
+  const highPriority = scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
+  const lowLow = quadrantCounts.notImportantNotUrgent;
 
-  if (totalGoalHours > 50)      return `Alert: you allotted ${totalGoalHours} hours this week, which may be unrealistic. Consider moving lower priority tasks to next week.`;
-  if (lowLow > highPriority)    return "Alert: you have more tasks in the not important / not urgent zone than in your top-priority zone. Consider eliminating or deferring some.";
-  if (highPriority === 0)       return "Alert: no tasks are currently both important and urgent. Double-check due dates and goal alignment.";
+  if (totalGoalHours > 50) return `Alert: you allotted ${totalGoalHours} hours this week, which may be unrealistic. Consider moving lower priority tasks to next week.`;
+  if (lowLow > highPriority) return "Alert: you have more tasks in the not important / not urgent zone than in your top-priority zone. Consider eliminating or deferring some.";
+  if (highPriority === 0) return "Alert: no tasks are currently both important and urgent. Double-check due dates and goal alignment.";
   return "Great todo list — this aligns well with your weekly goals. Keep momentum on important and urgent tasks first.";
 }
 

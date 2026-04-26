@@ -557,9 +557,35 @@ li {
   font-family: var(--font);
 }
 
-.cal-sug-add-btn:hover {
-  background: rgba(0, 0, 0, 0.25);
+.sug-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
 }
+
+.btn-dismiss {
+  background: transparent;
+  border: 2px solid var(--accent-dark);
+  color: var(--accent-dark);
+  font-family: var(--font);
+  padding: 5px 9px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 9.5pt;
+  line-height: 1;
+}
+
+.btn-dismiss:hover {
+  background: rgba(56, 33, 142, 0.12);
+}
+
+.cal-sug-dismiss-btn {
+  background: rgba(0, 0, 0, 0.08) !important;
+  margin-left: 2px;
+}
+
+
 
 /* ── Suggestions list panel ─────────────────────────────────────────────────── */
 .sug-list-panel {
