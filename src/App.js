@@ -84,6 +84,12 @@ function formatDayHeader(date) {
   return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+function weekKeyFromDate(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
 function minutesToDisplay(minutes) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
@@ -413,6 +419,11 @@ function App() {
   const [calSugStatus, setCalSugStatus] = useState("");
   const calEventIdCounter = useRef(1000);
   const calSuggestionIdCounter = useRef(1);
+  const currentWeekStartRef = useRef(currentWeekStart);
+
+  useEffect(() => {
+    currentWeekStartRef.current = currentWeekStart;
+  }, [currentWeekStart]);
 
   // ── load Google Identity script ─────────────────────────────────────────────
   useEffect(() => {
@@ -567,19 +578,21 @@ function App() {
       scope: GOOGLE_CALENDAR_SCOPE,
       callback: async (resp) => {
         if (!resp?.access_token) { setCalendarStatus("Google Calendar auth failed."); return; }
-        await loadGoogleCalendarEvents(resp.access_token);
+        await loadGoogleCalendarEvents(resp.access_token, currentWeekStartRef.current);
       },
     });
     if (!calTokenClient) setCalTokenClient(tc);
     tc.requestAccessToken({ prompt: "consent" });
   }
 
-  async function loadGoogleCalendarEvents(accessToken) {
+  async function loadGoogleCalendarEvents(accessToken, targetWeekStart = currentWeekStartRef.current) {
     setIsSyncingCal(true);
     setCalendarStatus("Loading Google Calendar events...");
     try {
-      const weekEnd = addDays(currentWeekStart, 7);
-      const timeMin = currentWeekStart.toISOString();
+      const selectedWeekStart = getWeekStart(targetWeekStart);
+      const selectedWeekKey = weekKeyFromDate(selectedWeekStart);
+      const weekEnd = addDays(selectedWeekStart, 7);
+      const timeMin = selectedWeekStart.toISOString();
       const timeMax = weekEnd.toISOString();
       const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=100`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -587,12 +600,13 @@ function App() {
       const items = (await res.json()).items || [];
 
       const mapped = items
-        .map((ev) => calendarEventFromGoogleEvent(ev, currentWeekStart))
+        .map((ev) => calendarEventFromGoogleEvent(ev, selectedWeekStart))
+        .map((ev) => (ev ? { ...ev, weekKey: selectedWeekKey } : null))
         .filter(Boolean);
 
-      // Keep manual events, replace google ones
+      // Keep all other weeks; replace google events only for selected week
       setCalendarEvents((prev) => [
-        ...prev.filter((e) => e.source !== "google"),
+        ...prev.filter((e) => !(e.source === "google" && e.weekKey === selectedWeekKey)),
         ...mapped,
       ]);
       setCalendarStatus(`Synced ${mapped.length} Google Calendar event${mapped.length !== 1 ? "s" : ""} for this week.`);
@@ -609,6 +623,7 @@ function App() {
   }
 
   function confirmAddEvent({ title, day, startMinute, endMinute }) {
+    const activeWeekKey = weekKeyFromDate(currentWeekStart);
     const newEv = {
       id: `cal-${calEventIdCounter.current++}`,
       title,
@@ -616,6 +631,7 @@ function App() {
       startMinute,
       endMinute: endMinute > startMinute ? endMinute : startMinute + 60,
       source: "manual",
+      weekKey: activeWeekKey,
     };
     setCalendarEvents((prev) => [...prev, newEv]);
     setCalendarStatus("Manual event added.");
@@ -632,10 +648,12 @@ function App() {
     setIsGenCalSug(true);
     setCalSugStatus("Analyzing your schedule for open slots…");
     setCalSuggestions([]);
+    const activeWeekKey = weekKeyFromDate(currentWeekStart);
+    const weekEvents = calendarEvents.filter((ev) => ev.weekKey === activeWeekKey);
 
     // Build a list of busy blocks per day
     const busyByDay = Array.from({ length: 7 }, () => []);
-    calendarEvents.forEach((ev) => {
+    weekEvents.forEach((ev) => {
       if (ev.day >= 0 && ev.day < 7) {
         busyByDay[ev.day].push({ startMinute: ev.startMinute, endMinute: ev.endMinute });
       }
@@ -699,12 +717,12 @@ ${JSON.stringify(prioritized)}
         busyByDay,
         titleByTaskId,
         () => `sug-${calSuggestionIdCounter.current++}`
-      );
+      ).map((s) => ({ ...s, weekKey: activeWeekKey }));
       if (sug.length === 0) throw new Error("No valid suggestions returned.");
       setCalSuggestions(sug);
       setCalSugStatus(`${sug.length} scheduling suggestion${sug.length !== 1 ? "s" : ""} ready. Click "+ Add" on any to lock it in.`);
     } catch (err) {
-      setCalSuggestions(fallback);
+      setCalSuggestions(fallback.map((s) => ({ ...s, weekKey: activeWeekKey })));
       setCalSugStatus(`Groq failed; showing local suggestions. (${err.message})`);
     } finally {
       setIsGenCalSug(false);
@@ -771,6 +789,7 @@ ${JSON.stringify(prioritized)}
       startMinute: suggestion.startMinute,
       endMinute: suggestion.endMinute,
       source: "manual",
+      weekKey: suggestion.weekKey || weekKeyFromDate(currentWeekStart),
     };
     setCalendarEvents((prev) => [...prev, newEv]);
     setCalSuggestions((prev) => prev.filter((s) => s.sugId !== suggestion.sugId));
@@ -866,8 +885,14 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
     return `${fmt(currentWeekStart)} – ${fmt(end)}, ${end.getFullYear()}`;
   })();
   const safeCalSuggestions = useMemo(
-    () => calSuggestions.slice(0, 6),
-    [calSuggestions]
+    () => calSuggestions
+      .filter((s) => s.weekKey === weekKeyFromDate(currentWeekStart))
+      .slice(0, 6),
+    [calSuggestions, currentWeekStart]
+  );
+  const visibleCalendarEvents = useMemo(
+    () => calendarEvents.filter((ev) => ev.weekKey === weekKeyFromDate(currentWeekStart)),
+    [calendarEvents, currentWeekStart]
   );
 
   // ── JSX ─────────────────────────────────────────────────────────────────────
@@ -1003,7 +1028,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         {/* Calendar grid */}
         <WeeklyCalendar
           weekStart={currentWeekStart}
-          calendarEvents={calendarEvents}
+          calendarEvents={visibleCalendarEvents}
           suggestions={safeCalSuggestions}
           onSlotClick={handleSlotClick}
           onAddSuggestion={addSuggestionToCalendar}
