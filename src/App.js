@@ -638,6 +638,8 @@ Rules:
 - Higher importance/urgency tasks get earlier and longer slots
 - Apply human-centered scheduling: do not front-load everything at the start of the day or week; spread work realistically, include buffer time for travel/context-switching, and avoid common meal windows (roughly 12:00-1:00 PM and 6:00-7:00 PM) unless necessary.
 - Provide at most 6 suggestions total
+- Add sleeping hours at the highest priority as a default on the calendar for the entire week
+- Fill suggestions on the calendar for the entire week based on the prioritized tasks and the busy blocks
 
 Current busy blocks this week:
 ${JSON.stringify(busySummary)}
