@@ -533,10 +533,10 @@ function App() {
           `https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false&maxResults=100`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        if (!tasksRes.ok) continue;
-        const tasksData = await tasksRes.json();
+        if (!res.ok) continue;
+        const tasksData = await res.json();
         (tasksData.items || []).forEach((task) => {
-          allTasks.push({
+          all.push({
             id: task.id,
             title: task.title || "Untitled task",
             due: task.due || null,
