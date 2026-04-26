@@ -11,7 +11,7 @@ Priority matrix web app that visualizes task urgency and importance in a 4x4 Eis
    - `REACT_APP_GOOGLE_CLIENT_ID`
 3. Start the app:
    - `npm start`
-4. Open [https://localhost:3000](https://localhost:3000) in your browser.
+4. Open [our Synapse](https://synapse3-topaz.vercel.app/) in your browser.
 
 ## Google Tasks testing on localhost
 
