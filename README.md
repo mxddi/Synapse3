@@ -11,7 +11,7 @@ Visit [the web app here.](https://synapse3-topaz.vercel.app/)
    - `REACT_APP_GOOGLE_CLIENT_ID`
 3. Start the app:
    - `npm start`
-4. Open [Synapse](https://localhost:3000) in your browser.
+4. Open [https://localhost:3000](https://localhost:3000) in your browser.
 
 ## Notes
 
