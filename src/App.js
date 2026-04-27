@@ -978,20 +978,33 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
               </div>
             )}
             <div className="task-card-top">
-              <h4>{task.title}</h4>
-              <label className="task-complete-control" title="Mark complete">
-                <input
-                  type="checkbox"
-                  className="task-complete-checkbox"
-                  checked={Boolean(task.completed)}
-                  onChange={() => toggleTaskCompleted(task.id)}
-                  aria-label={`Mark ${task.title} as completed`}
-                />
-              </label>
-            </div>
-            <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
-            <div className="task-card-actions">
-              <button type="button" onClick={() => startEditingTask(task)}>Edit</button>
+              <div>
+                <h4>{task.title}</h4>
+                <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                <label className="task-complete-control" title="Mark complete">
+                  <input
+                    type="checkbox"
+                    className="task-complete-checkbox"
+                    checked={Boolean(task.completed)}
+                    onChange={() => toggleTaskCompleted(task.id)}
+                    aria-label={`Mark ${task.title} as completed`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="task-edit-icon-button"
+                  onClick={() => startEditingTask(task)}
+                  aria-label="Edit task"
+                  title="Edit task"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    <path d="m15 5 4 4" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -1003,7 +1016,10 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
     return (
       <article key={task.id} className="task-card task-card-completed">
         <div className="task-card-top">
-          <h4>{task.title}</h4>
+          <div>
+            <h4>{task.title}</h4>
+            <p>Completed</p>
+          </div>
           <label className="task-complete-control" title="Mark as active again">
             <input
               type="checkbox"
@@ -1014,7 +1030,6 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
             />
           </label>
         </div>
-        <p>Completed</p>
       </article>
     );
   }
@@ -1081,7 +1096,10 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
                   <div className="goal-view-row">
                     <span><strong>{goal.name}</strong> — {goal.weeklyHours} hrs/week</span>
                     <button type="button" className="edit-icon-button" onClick={() => startEditingGoal(goal)} aria-label="Edit goal" title="Edit goal">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.04a1.003 1.003 0 0 0 0-1.42l-2.5-2.5a1.003 1.003 0 0 0-1.42 0l-1.96 1.96 3.75 3.75 2.13-1.79z" fill="currentColor" /></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        <path d="m15 5 4 4" />
+                      </svg>
                     </button>
                   </div>
                 )}

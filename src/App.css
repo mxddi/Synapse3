@@ -124,19 +124,27 @@ li {
 }
 
 .edit-icon-button {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: #ffffff;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.edit-icon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  filter: none;
 }
 
 .edit-icon-button svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .goal-edit-row {
@@ -233,6 +241,30 @@ li {
 .task-card-actions button {
   padding: 5px 8px;
   font-size: 0.78rem;
+}
+
+.task-edit-icon-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.task-edit-icon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  filter: none;
+}
+
+.task-edit-icon-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .task-edit-form {
