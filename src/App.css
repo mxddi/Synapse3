@@ -39,7 +39,8 @@ body {
 
 .panel,
 .matrix-section,
-.suggestions {
+.suggestions,
+.done-tasks-section {
   background: rgba(255, 255, 255, 0.14);
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 14px;
@@ -323,6 +324,14 @@ li {
 
 .suggestions {
   margin-top: 18px;
+}
+
+.done-tasks-section {
+  margin-top: 18px;
+}
+
+.done-task-list {
+  margin-top: 10px;
 }
 
 .suggestions textarea {

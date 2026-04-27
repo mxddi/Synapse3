@@ -437,13 +437,16 @@ function App() {
   }, []);
 
   // ── derived task data ───────────────────────────────────────────────────────
+  const activeTasks = useMemo(() => tasks.filter((t) => !t.completed), [tasks]);
+  const doneTasks = useMemo(() => tasks.filter((t) => t.completed), [tasks]);
+
   const scoredTasks = useMemo(
-    () => tasks.map((t) => ({
+    () => activeTasks.map((t) => ({
       ...t,
       urgency: urgencyScoreFromDueDate(t.due),
       quadrant: getQuadrant(t.importance, urgencyScoreFromDueDate(t.due)),
     })),
-    [tasks]
+    [activeTasks]
   );
 
   const quadrantTasks = useMemo(() => {
@@ -880,6 +883,26 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
     );
   }
 
+  function renderDoneTaskCard(task) {
+    return (
+      <article key={task.id} className="task-card task-card-completed">
+        <div className="task-card-top">
+          <h4>{task.title}</h4>
+          <label className="task-complete-control" title="Mark as active again">
+            <input
+              type="checkbox"
+              className="task-complete-checkbox"
+              checked={Boolean(task.completed)}
+              onChange={() => toggleTaskCompleted(task.id)}
+              aria-label={`Mark ${task.title} as active`}
+            />
+          </label>
+        </div>
+        <p>Completed</p>
+      </article>
+    );
+  }
+
   const prevWeek = () => setCurrentWeekStart((w) => addDays(w, -7));
   const nextWeek = () => setCurrentWeekStart((w) => addDays(w, 7));
   const thisWeek = () => setCurrentWeekStart(getWeekStart(new Date()));
@@ -987,6 +1010,18 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="done-tasks-section">
+        <h2>Done Tasks</h2>
+        <p className="status">
+          {doneTasks.length
+            ? `${doneTasks.length} completed task${doneTasks.length === 1 ? "" : "s"}`
+            : "No completed tasks yet."}
+        </p>
+        <div className="done-task-list">
+          {doneTasks.map((t) => renderDoneTaskCard(t))}
         </div>
       </section>
 

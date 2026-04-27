@@ -1,8 +1,16 @@
 # Synapse
+Synapse is an AI-powered task prioritization web app that bridges the intuitive gap between your daily to-do list and your long-term goals.
+Visit [the web app here.](https://synapse3-topaz.vercel.app/)
 
-Priority matrix web app that visualizes task urgency and importance in a 4x4 Eisenhower matrix.
 
-## Run locally
+Users begin by entering their weekly goals along with the number of hours they want to dedicate to each. Synapse then pulls in tasks directly from Google Calendar and Google Tasks—or lets users enter them manually—and automatically scores each task across two dimensions: urgency, calculated from the task's due date, and importance, determined by an AI-powered alignment check against the user's stated goals. Each task is assigned a vector and placed into one of the four quadrants of a visual Eisenhower Matrix, naturally training users to learn an intuitive mental method for task prioritization over time.
+
+Based on a user’s goal-oriented task prioritization matrix, a Groq-powered AI coach generates personalized suggestions and alerts — flagging tasks that don't align with any of your goals, warning when your time allocations fall short of what a goal requires, and celebrating when your week is well-structured. 
+
+Automated adjustments are made to calendar scheduling based on every task's relevancy to a user's goals and schedule availability. Users can review prioritization suggestions and accept, reject, or edit schedule adjustments based on intelligent feedback—placing the user in executive control while letting AI assist with clearing mental clutter and enhancing available time all while considering long term goals.
+
+
+## Running locally:
 
 1. Install dependencies:
    - `npm install`
@@ -12,25 +20,6 @@ Priority matrix web app that visualizes task urgency and importance in a 4x4 Eis
 3. Start the app:
    - `npm start`
 4. Open [https://localhost:3000](https://localhost:3000) in your browser.
-
-## Google Tasks testing on localhost
-
-To connect Google Tasks during local testing, configure your Google Cloud OAuth app (Web application type):
-
-1. In Google Cloud Console, open **APIs & Services > Credentials**.
-2. Create or edit an **OAuth 2.0 Client ID** for web.
-3. Add these values:
-   - **Authorized JavaScript origins**
-     - `https://localhost:3000`
-     - `http://localhost:3000` (recommended fallback for CRA default)
-   - **Authorized redirect URIs**
-     - `https://localhost:3000`
-     - `http://localhost:3000`
-4. Ensure **Google Tasks API** is enabled for the same project.
-5. In **OAuth consent screen**, keep app type as **External** and add your test users.
-6. Copy the OAuth web client ID into `REACT_APP_GOOGLE_CLIENT_ID`.
-
-Then click **Connect Google Tasks** in the app. The browser OAuth popup returns an access token that the app uses to fetch task lists and tasks via the Google Tasks REST API.
 
 ## Notes
 
