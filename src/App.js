@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Google API scopes ────────────────────────────────────────────────────────
-const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
+const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -107,6 +107,21 @@ function minutesToTimeInput(minutes) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function toDateInputValue(dateValue) {
+  if (!dateValue) return "";
+  const d = new Date(dateValue);
+  if (Number.isNaN(d.getTime())) return "";
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toGoogleDueDate(dateValue) {
+  if (!dateValue) return null;
+  return `${dateValue}T12:00:00.000Z`;
 }
 
 function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitleById = new Map(), idFactory = null) {
@@ -406,6 +421,9 @@ function App() {
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [tokenClientReady, setTokenClientReady] = useState(false);
   const [googleTokenClient, setGoogleTokenClient] = useState(null);
+  const [googleAccessToken, setGoogleAccessToken] = useState("");
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [editingTaskDraft, setEditingTaskDraft] = useState({ title: "", due: "", notes: "" });
 
   // ── calendar state ──────────────────────────────────────────────────────────
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -514,6 +532,72 @@ function App() {
     setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, completed: !t.completed } : t));
   }
 
+  function startEditingTask(task) {
+    setEditingTaskId(task.id);
+    setEditingTaskDraft({
+      title: task.title || "",
+      due: toDateInputValue(task.due),
+      notes: task.notes || "",
+    });
+  }
+
+  function cancelEditingTask() {
+    setEditingTaskId(null);
+    setEditingTaskDraft({ title: "", due: "", notes: "" });
+  }
+
+  async function saveTaskEdit(task) {
+    const title = editingTaskDraft.title.trim();
+    if (!title) return;
+
+    const notes = editingTaskDraft.notes.trim();
+    const dueIso = editingTaskDraft.due ? toGoogleDueDate(editingTaskDraft.due) : null;
+
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id
+          ? { ...t, title, notes, due: dueIso }
+          : t
+      )
+    );
+    cancelEditingTask();
+
+    if (task.source === "google" && task.taskListId) {
+      if (!googleAccessToken) {
+        setStatus("Task edited locally. Reconnect Google Tasks to sync edits to Google.");
+        return;
+      }
+      try {
+        const updateRes = await fetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${task.taskListId}/tasks/${task.id}`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              id: task.id,
+              title,
+              notes,
+              due: dueIso || undefined,
+            }),
+          }
+        );
+        if (!updateRes.ok) {
+          const text = await updateRes.text();
+          throw new Error(`Google update failed (${updateRes.status}): ${text}`);
+        }
+        setStatus("Task updated and synced to Google Tasks.");
+      } catch (error) {
+        setStatus(`Task updated locally, but Google sync failed: ${error.message}`);
+      }
+      return;
+    }
+
+    setStatus("Task updated.");
+  }
+
   // ── Google Tasks ────────────────────────────────────────────────────────────
   async function connectGoogleTasks() {
     const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
@@ -525,6 +609,7 @@ function App() {
       scope: GOOGLE_TASKS_SCOPE,
       callback: async (resp) => {
         if (!resp?.access_token) { setStatus("Google auth failed."); return; }
+        setGoogleAccessToken(resp.access_token);
         await loadGoogleTasks(resp.access_token);
       },
     });
@@ -556,6 +641,7 @@ function App() {
             due: task.due || null,
             notes: task.notes || "",
             source: "google",
+            taskListId: list.id,
             importance: 3,
             urgency: urgencyScoreFromDueDate(task.due),
             completed: false,
@@ -859,26 +945,56 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
 
   // ── Rendering helpers ───────────────────────────────────────────────────────
   function renderTaskCard(task) {
+    const isEditing = editingTaskId === task.id;
     return (
       <article key={task.id} className={`task-card ${task.completed ? "task-card-completed" : ""} ${task.notes ? "task-card-has-notes" : ""}`}>
-        {task.notes && (
-          <div className="task-notes-tooltip">
-            {task.notes}
-          </div>
-        )}
-        <div className="task-card-top">
-          <h4>{task.title}</h4>
-          <label className="task-complete-control" title="Mark complete">
+        {isEditing ? (
+          <div className="task-edit-form">
             <input
-              type="checkbox"
-              className="task-complete-checkbox"
-              checked={Boolean(task.completed)}
-              onChange={() => toggleTaskCompleted(task.id)}
-              aria-label={`Mark ${task.title} as completed`}
+              value={editingTaskDraft.title}
+              onChange={(e) => setEditingTaskDraft((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder="Task title"
             />
-          </label>
-        </div>
-        <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
+            <input
+              type="date"
+              value={editingTaskDraft.due}
+              onChange={(e) => setEditingTaskDraft((prev) => ({ ...prev, due: e.target.value }))}
+            />
+            <input
+              value={editingTaskDraft.notes}
+              onChange={(e) => setEditingTaskDraft((prev) => ({ ...prev, notes: e.target.value }))}
+              placeholder="Notes"
+            />
+            <div className="task-card-actions">
+              <button type="button" onClick={() => saveTaskEdit(task)}>Save</button>
+              <button type="button" className="btn-ghost" onClick={cancelEditingTask}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {task.notes && (
+              <div className="task-notes-tooltip">
+                {task.notes}
+              </div>
+            )}
+            <div className="task-card-top">
+              <h4>{task.title}</h4>
+              <label className="task-complete-control" title="Mark complete">
+                <input
+                  type="checkbox"
+                  className="task-complete-checkbox"
+                  checked={Boolean(task.completed)}
+                  onChange={() => toggleTaskCompleted(task.id)}
+                  aria-label={`Mark ${task.title} as completed`}
+                />
+              </label>
+            </div>
+            <p>Due: {task.due ? new Date(task.due).toLocaleDateString() : "No date"}</p>
+            <div className="task-card-actions">
+              <button type="button" onClick={() => startEditingTask(task)}>Edit</button>
+            </div>
+          </>
+        )}
       </article>
     );
   }

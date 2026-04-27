@@ -224,6 +224,23 @@ li {
   font-size: 0.8rem;
 }
 
+.task-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.task-card-actions button {
+  padding: 5px 8px;
+  font-size: 0.78rem;
+}
+
+.task-edit-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
 .task-complete-control {
   display: inline-flex;
   align-items: center;
