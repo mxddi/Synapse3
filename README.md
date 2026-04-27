@@ -1,7 +1,8 @@
 # Synapse
 Synapse is an AI-powered task prioritization web app that bridges the intuitive gap between your daily to-do list and your long-term goals.
+Visit [the web app here.](https://synapse3-topaz.vercel.app/)
 
-## Run locally
+## Running locally:
 
 1. Install dependencies:
    - `npm install`
@@ -10,7 +11,7 @@ Synapse is an AI-powered task prioritization web app that bridges the intuitive 
    - `REACT_APP_GOOGLE_CLIENT_ID`
 3. Start the app:
    - `npm start`
-4. Open [Synapse](https://synapse3-topaz.vercel.app/) in your browser.
+4. Open [Synapse](https://localhost:3000) in your browser.
 
 ## Notes
 
