@@ -733,15 +733,15 @@ ${JSON.stringify(prioritized)}
     const suggestions = [];
     const usedSlots = busyByDay.map((blocks) => [...blocks]); // copy
 
-  for (let taskIndex = 0; taskIndex < prioritized.length; taskIndex++) {
-    const task = prioritized[taskIndex];
+    for (let taskIndex = 0; taskIndex < prioritized.length; taskIndex++) {
+      const task = prioritized[taskIndex];
       const duration = task.importance >= 3 ? 90 : 60; // minutes
       let placed = false;
-    const preferredStart = task.urgency >= 3 ? 1 : 3; // urgent tasks still start earlier in week
-    const dayOrder = Array.from({ length: 7 }, (_, i) => (preferredStart + taskIndex + i) % 7);
+      const preferredStart = task.urgency >= 3 ? 1 : 3; // urgent tasks still start earlier in week
+      const dayOrder = Array.from({ length: 7 }, (_, i) => (preferredStart + taskIndex + i) % 7);
 
-    for (const di of dayOrder) {
-      if (placed) break;
+      for (const di of dayOrder) {
+        if (placed) break;
         for (let start = CAL_START_HOUR * 60; start + duration <= CAL_END_HOUR * 60; start += 30) {
           const end = start + duration;
           const overlaps = usedSlots[di].some((b) => start < b.endMinute && end > b.startMinute);
@@ -767,13 +767,13 @@ ${JSON.stringify(prioritized)}
       }
       if (suggestions.length >= 6) break;
     }
-  const titleByTaskId = new Map(prioritized.map((t) => [t.id, t.title]));
-  return normalizeAndLimitSuggestions(
-    suggestions,
-    busyByDay,
-    titleByTaskId,
-    () => `sug-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  );
+    const titleByTaskId = new Map(prioritized.map((t) => [t.id, t.title]));
+    return normalizeAndLimitSuggestions(
+      suggestions,
+      busyByDay,
+      titleByTaskId,
+      () => `sug-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
   }
 
   function deleteSuggestionFromCalendar(suggestion) {
@@ -905,7 +905,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
     <div className="app-shell">
       {/* ── Header ── */}
       <header className="header">
-        <h1>Synapse</h1>
+        <h1>S Y N Λ P S E</h1>
         <p>Automated time management for students and professionals.</p>
       </header>
 
@@ -952,7 +952,7 @@ Tasks with urgency and importance: ${JSON.stringify(scoredTasks.map((t) => ({ ti
         </div>
 
         <div className="panel">
-          <h2>To-do List</h2>
+          <h2>To-Do List</h2>
           <div className="button-row">
             <button onClick={connectGoogleTasks}>Connect Google Tasks</button>
             <button onClick={scoreTaskImportanceWithGroq} disabled={isScoring}>{isScoring ? "Scoring…" : "Score Importance"}</button>
