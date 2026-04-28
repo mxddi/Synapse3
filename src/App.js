@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 // ─── Google API scopes ────────────────────────────────────────────────────────
 const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE}`;
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── Calendar display constants ───────────────────────────────────────────────
@@ -424,12 +425,12 @@ function App() {
   const [googleAccessToken, setGoogleAccessToken] = useState("");
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [editingTaskDraft, setEditingTaskDraft] = useState({ title: "", due: "", notes: "" });
+  const googleAuthPendingRef = useRef(null); // { resolve, reject } for in-flight token requests
 
   // ── calendar state ──────────────────────────────────────────────────────────
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [calendarStatus, setCalendarStatus] = useState("Connect Google Calendar or click a time slot to add events.");
   const [isSyncingCal, setIsSyncingCal] = useState(false);
-  const [calTokenClient, setCalTokenClient] = useState(null);
   const [currentWeekStart, setCurrentWeekStart] = useState(() => getWeekStart(new Date()));
   const [addEventSlot, setAddEventSlot] = useState(null);  // {day, startMinute} or null
   const [calSuggestions, setCalSuggestions] = useState([]);
@@ -453,6 +454,51 @@ function App() {
     document.body.appendChild(script);
     return () => document.body.removeChild(script);
   }, []);
+
+  async function requestGoogleAccessToken({ prompt = "" } = {}) {
+    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+    if (!clientId) throw new Error("Missing REACT_APP_GOOGLE_CLIENT_ID.");
+    if (!tokenClientReady || !window.google?.accounts?.oauth2) throw new Error("Google script not ready yet.");
+
+    // If there's already a request in flight, reuse it.
+    if (googleAuthPendingRef.current?.promise) return googleAuthPendingRef.current.promise;
+
+    const promise = new Promise((resolve, reject) => {
+      googleAuthPendingRef.current = { resolve, reject, promise: null };
+    });
+    googleAuthPendingRef.current.promise = promise;
+
+    const tc = googleTokenClient || window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_COMBINED_SCOPE,
+      callback: (resp) => {
+        const pending = googleAuthPendingRef.current;
+        googleAuthPendingRef.current = null;
+        if (!pending) return;
+        if (!resp?.access_token) {
+          pending.reject(new Error("Google auth failed."));
+          return;
+        }
+        setGoogleAccessToken(resp.access_token);
+        pending.resolve(resp.access_token);
+      },
+    });
+    if (!googleTokenClient) setGoogleTokenClient(tc);
+
+    try {
+      tc.requestAccessToken({ prompt });
+    } catch (err) {
+      googleAuthPendingRef.current = null;
+      throw err;
+    }
+
+    return promise;
+  }
+
+  async function ensureGoogleAccessToken({ forceConsent = false } = {}) {
+    if (googleAccessToken) return googleAccessToken;
+    return await requestGoogleAccessToken({ prompt: forceConsent ? "consent" : "consent" });
+  }
 
   // ── derived task data ───────────────────────────────────────────────────────
   const activeTasks = useMemo(() => tasks.filter((t) => !t.completed), [tasks]);
@@ -600,21 +646,12 @@ function App() {
 
   // ── Google Tasks ────────────────────────────────────────────────────────────
   async function connectGoogleTasks() {
-    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId) { setStatus("Missing REACT_APP_GOOGLE_CLIENT_ID."); return; }
-    if (!tokenClientReady || !window.google?.accounts?.oauth2) { setStatus("Google script not ready yet."); return; }
-
-    const tc = googleTokenClient || window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: GOOGLE_TASKS_SCOPE,
-      callback: async (resp) => {
-        if (!resp?.access_token) { setStatus("Google auth failed."); return; }
-        setGoogleAccessToken(resp.access_token);
-        await loadGoogleTasks(resp.access_token);
-      },
-    });
-    if (!googleTokenClient) setGoogleTokenClient(tc);
-    tc.requestAccessToken({ prompt: "consent" });
+    try {
+      const token = await ensureGoogleAccessToken({ forceConsent: !googleAccessToken });
+      await loadGoogleTasks(token);
+    } catch (err) {
+      setStatus(err?.message || "Google auth failed.");
+    }
   }
 
   async function loadGoogleTasks(accessToken) {
@@ -658,20 +695,12 @@ function App() {
 
   // ── Google Calendar ─────────────────────────────────────────────────────────
   async function connectGoogleCalendar() {
-    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId) { setCalendarStatus("Missing REACT_APP_GOOGLE_CLIENT_ID."); return; }
-    if (!tokenClientReady || !window.google?.accounts?.oauth2) { setCalendarStatus("Google script not ready yet."); return; }
-
-    const tc = calTokenClient || window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: GOOGLE_CALENDAR_SCOPE,
-      callback: async (resp) => {
-        if (!resp?.access_token) { setCalendarStatus("Google Calendar auth failed."); return; }
-        await loadGoogleCalendarEvents(resp.access_token, currentWeekStartRef.current);
-      },
-    });
-    if (!calTokenClient) setCalTokenClient(tc);
-    tc.requestAccessToken({ prompt: "consent" });
+    try {
+      const token = await ensureGoogleAccessToken({ forceConsent: !googleAccessToken });
+      await loadGoogleCalendarEvents(token, currentWeekStartRef.current);
+    } catch (err) {
+      setCalendarStatus(err?.message || "Google Calendar auth failed.");
+    }
   }
 
   async function loadGoogleCalendarEvents(accessToken, targetWeekStart = currentWeekStartRef.current) {
