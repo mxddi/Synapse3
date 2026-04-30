@@ -7,7 +7,7 @@ WebBrowser.maybeCompleteAuthSession();
 const TOKEN_KEY = "synapse_google_token_v1";
 
 export const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
-export const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+export const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
 export const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE}`;
 
 type StoredToken = {

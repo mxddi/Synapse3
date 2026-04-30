@@ -18,7 +18,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { GestureHandlerRootView, Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 
-import { fetchGoogleCalendarEvents, fetchGoogleTasks, updateGoogleTask } from "../shared/googleApis";
+import { createGoogleCalendarEvent, fetchGoogleCalendarEvents, fetchGoogleTasks, updateGoogleTask } from "../shared/googleApis";
 import { addDays, CAL_END_HOUR, CAL_START_HOUR, getQuadrant, getWeekStart, minutesToDisplay, normalizeAndLimitSuggestions, urgencyScoreFromDueDate, weekKeyFromDate } from "../shared/synapseCore";
 import { disconnectGoogle, getGoogleAccessToken } from "./src/auth/googleAuth";
 
@@ -635,23 +635,51 @@ function CalendarScreen({ state }) {
     state.setAddEventSlot({ day: dayIndex, startMinute: clamped });
   }
 
-  function confirmAddEvent({ title, day, startMinute, endMinute }) {
-    const activeWeekKey = weekKeyFromDate(state.currentWeekStart);
-    const newEv = {
-      id: `cal-${state.calEventIdCounter.current++}`,
-      title,
-      day,
-      startMinute,
-      endMinute: endMinute > startMinute ? endMinute : startMinute + 60,
-      source: "manual",
-      weekKey: activeWeekKey,
-    };
-    state.setCalendarEvents((prev) => [...prev, newEv]);
-    state.setCalendarStatus("Manual event added.");
-    state.setAddEventSlot(null);
-    state.setCalSuggestions((prev) =>
-      prev.filter((s) => s.day !== day || s.endMinute <= startMinute || s.startMinute >= newEv.endMinute)
-    );
+  function confirmAddEvent({ title, day, startMinute, endMinute, isAllDay, reminderMinutes }) {
+    (async () => {
+      const activeWeekKey = weekKeyFromDate(state.currentWeekStart);
+      state.setCalendarStatus("Adding event…");
+
+      const clientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || "";
+      if (clientId) {
+        try {
+          const token = await getGoogleAccessToken({ clientId });
+          const created = await createGoogleCalendarEvent(token, {
+            weekStart: state.currentWeekStart,
+            day,
+            title,
+            startMinute,
+            endMinute,
+            isAllDay: Boolean(isAllDay),
+            reminderMinutes: reminderMinutes ?? null,
+          });
+          state.setCalendarEvents((prev) => [...prev, created]);
+          state.setCalendarStatus("Added to Google Calendar.");
+          state.setAddEventSlot(null);
+          state.setCalSuggestions((prev) =>
+            prev.filter((s) => s.day !== day || s.endMinute <= created.startMinute || s.startMinute >= created.endMinute)
+          );
+          return;
+        } catch (err) {
+          state.setCalendarStatus(err?.message ? `Failed to add to Google Calendar; added locally instead. (${err.message})` : "Failed to add to Google Calendar; added locally instead.");
+        }
+      }
+
+      const newEv = {
+        id: `cal-${state.calEventIdCounter.current++}`,
+        title,
+        day,
+        startMinute,
+        endMinute: endMinute > startMinute ? endMinute : startMinute + 60,
+        source: "manual",
+        weekKey: activeWeekKey,
+      };
+      state.setCalendarEvents((prev) => [...prev, newEv]);
+      state.setAddEventSlot(null);
+      state.setCalSuggestions((prev) =>
+        prev.filter((s) => s.day !== day || s.endMinute <= startMinute || s.startMinute >= newEv.endMinute)
+      );
+    })();
   }
 
   function addSuggestionToCalendar(suggestion) {
@@ -977,15 +1005,32 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
   const [title, setTitle] = useState("");
   const [startTime, setStartTime] = useState(minutesToTimeInput(slot.startMinute));
   const [endTime, setEndTime] = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
+  const [isAllDay, setIsAllDay] = useState(false);
+  const [reminderMode, setReminderMode] = useState("default"); // default | none | 10 | 30 | 60 | custom
+  const [customReminder, setCustomReminder] = useState("15");
   const dayLabel = addDays(weekStart, slot.day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 
   function handleConfirm() {
     if (!title.trim()) return;
+    const reminderMinutes =
+      reminderMode === "default"
+        ? null
+        : reminderMode === "none"
+          ? 0
+          : reminderMode === "custom"
+            ? (() => {
+                const n = Number(customReminder);
+                return Number.isFinite(n) && n >= 0 ? n : null;
+              })()
+            : Number(reminderMode);
+
     onConfirm({
       title: title.trim(),
       day: slot.day,
-      startMinute: timeStringToMinutes(startTime),
-      endMinute: timeStringToMinutes(endTime),
+      startMinute: isAllDay ? 0 : timeStringToMinutes(startTime),
+      endMinute: isAllDay ? 24 * 60 : timeStringToMinutes(endTime),
+      isAllDay,
+      reminderMinutes,
     });
     setTitle("");
   }
@@ -997,9 +1042,46 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
           <Text style={styles.modalTitle}>Add Event — {dayLabel}</Text>
           <TextInput style={styles.input} placeholder="Event title" value={title} onChangeText={setTitle} />
           <View style={styles.spacer8} />
-          <TextInput style={styles.input} placeholder="Start (HH:MM)" value={startTime} onChangeText={setStartTime} />
+          <TextInput style={[styles.input, isAllDay ? { opacity: 0.5 } : null]} editable={!isAllDay} placeholder="Start (HH:MM)" value={startTime} onChangeText={setStartTime} />
           <View style={styles.spacer8} />
-          <TextInput style={styles.input} placeholder="End (HH:MM)" value={endTime} onChangeText={setEndTime} />
+          <TextInput style={[styles.input, isAllDay ? { opacity: 0.5 } : null]} editable={!isAllDay} placeholder="End (HH:MM)" value={endTime} onChangeText={setEndTime} />
+          <View style={styles.spacer8} />
+          <Pressable onPress={() => setIsAllDay((p) => !p)} style={styles.row} accessibilityRole="checkbox">
+            <View style={[styles.checkbox, isAllDay ? styles.checkboxOn : null]} />
+            <Text style={styles.checkboxLabel}>All day</Text>
+          </Pressable>
+          <View style={styles.spacer8} />
+          <Text style={styles.label}>Reminder</Text>
+          <View style={[styles.row, { flexWrap: "wrap" }]}>
+            {[
+              { id: "default", label: "Default" },
+              { id: "10", label: "10m" },
+              { id: "30", label: "30m" },
+              { id: "60", label: "60m" },
+              { id: "custom", label: "Custom" },
+              { id: "none", label: "None" },
+            ].map((opt) => (
+              <Pressable
+                key={opt.id}
+                onPress={() => setReminderMode(opt.id)}
+                style={[styles.pill, reminderMode === opt.id ? styles.pillOn : null]}
+              >
+                <Text style={[styles.pillText, reminderMode === opt.id ? styles.pillTextOn : null]}>{opt.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          {reminderMode === "custom" && (
+            <>
+              <View style={styles.spacer8} />
+              <TextInput
+                style={styles.input}
+                placeholder="Minutes before (e.g. 15)"
+                keyboardType="numeric"
+                value={customReminder}
+                onChangeText={setCustomReminder}
+              />
+            </>
+          )}
           <View style={styles.modalActions}>
             <OutlineButton title="Cancel" onPress={onCancel} />
             <View style={styles.spacer8} />
@@ -1132,6 +1214,45 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: stylesVars.card2,
+  },
+  checkboxOn: {
+    backgroundColor: "#111",
+    borderColor: "#111",
+  },
+  checkboxLabel: {
+    marginLeft: 10,
+    color: stylesVars.fg,
+    fontWeight: "800",
+  },
+  pill: {
+    borderColor: stylesVars.border,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: stylesVars.card2,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  pillOn: {
+    backgroundColor: "#111",
+    borderColor: "#111",
+  },
+  pillText: {
+    color: stylesVars.fgMuted,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  pillTextOn: {
+    color: "#fff",
   },
   spacer8: { width: 8, height: 8 },
   spacer12: { width: 12, height: 12 },

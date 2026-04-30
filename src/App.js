@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Google API scopes ────────────────────────────────────────────────────────
 const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
-const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
 const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE}`;
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -123,6 +123,85 @@ function toDateInputValue(dateValue) {
 function toGoogleDueDate(dateValue) {
   if (!dateValue) return null;
   return `${dateValue}T12:00:00.000Z`;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function minutesToHhMm(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${pad2(h)}:${pad2(m)}`;
+}
+
+function buildDateTimeIsoLocal({ baseDate, minutesFromMidnight }) {
+  const d = new Date(baseDate);
+  d.setHours(0, 0, 0, 0);
+  const hhmm = minutesToHhMm(minutesFromMidnight);
+  const datePart = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${datePart}T${hhmm}:00`;
+}
+
+async function createGoogleCalendarEvent(accessToken, {
+  weekStart,
+  day,
+  title,
+  startMinute,
+  endMinute,
+  isAllDay = false,
+  reminderMinutes = null, // null => calendar default; 0 => none; number => popup minutes
+}) {
+  if (!accessToken) throw new Error("Missing Google access token.");
+  if (!title?.trim()) throw new Error("Event title is required.");
+
+  const selectedWeekStart = getWeekStart(weekStart);
+  const selectedWeekKey = weekKeyFromDate(selectedWeekStart);
+  const dayDate = addDays(selectedWeekStart, day);
+
+  const timeZone =
+    (typeof Intl !== "undefined" && Intl.DateTimeFormat?.().resolvedOptions?.().timeZone) ||
+    "UTC";
+
+  const safeStart = Number.isFinite(startMinute) ? startMinute : 0;
+  const safeEnd = Number.isFinite(endMinute) && endMinute > safeStart ? endMinute : safeStart + 60;
+
+  const eventResource = {
+    summary: title.trim(),
+    ...(isAllDay
+      ? {
+          start: { date: dayDate.toISOString().slice(0, 10) },
+          end: { date: addDays(dayDate, 1).toISOString().slice(0, 10) },
+        }
+      : {
+          start: { dateTime: buildDateTimeIsoLocal({ baseDate: dayDate, minutesFromMidnight: safeStart }), timeZone },
+          end: { dateTime: buildDateTimeIsoLocal({ baseDate: dayDate, minutesFromMidnight: safeEnd }), timeZone },
+        }),
+    reminders:
+      reminderMinutes == null
+        ? { useDefault: true }
+        : reminderMinutes === 0
+          ? { useDefault: false, overrides: [] }
+          : { useDefault: false, overrides: [{ method: "popup", minutes: Number(reminderMinutes) }] },
+  };
+
+  const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(eventResource),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Calendar create failed (${res.status}): ${text}`);
+  }
+  const created = await res.json();
+
+  const mapped = calendarEventFromGoogleEvent(created, selectedWeekStart);
+  if (!mapped) throw new Error("Created event could not be mapped for display.");
+  return { ...mapped, weekKey: selectedWeekKey };
 }
 
 function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitleById = new Map(), idFactory = null) {
@@ -354,14 +433,30 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
   const [title, setTitle] = useState("");
   const [startTime, setStart] = useState(minutesToTimeInput(slot.startMinute));
   const [endTime, setEnd] = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
+  const [isAllDay, setIsAllDay] = useState(false);
+  const [reminderMode, setReminderMode] = useState("default"); // default | none | 10 | 30 | 60 | custom
+  const [customReminder, setCustomReminder] = useState("15");
 
-  function handleConfirm() {
+  function parseReminderMinutes() {
+    if (reminderMode === "default") return null;
+    if (reminderMode === "none") return null;
+    if (reminderMode === "custom") {
+      const n = Number(customReminder);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    }
+    const n = Number(reminderMode);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  async function handleConfirm() {
     if (!title.trim()) return;
-    onConfirm({
+    await onConfirm({
       title: title.trim(),
       day: slot.day,
-      startMinute: timeStringToMinutes(startTime),
-      endMinute: timeStringToMinutes(endTime),
+      startMinute: isAllDay ? 0 : timeStringToMinutes(startTime),
+      endMinute: isAllDay ? 24 * 60 : timeStringToMinutes(endTime),
+      isAllDay,
+      reminderMinutes: reminderMode === "none" ? 0 : parseReminderMinutes(),
     });
   }
 
@@ -384,11 +479,39 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
         </div>
         <div className="modal-field">
           <label>Start</label>
-          <input type="time" step="900" value={startTime} onChange={(e) => setStart(e.target.value)} />
+          <input type="time" step="900" value={startTime} onChange={(e) => setStart(e.target.value)} disabled={isAllDay} />
         </div>
         <div className="modal-field">
           <label>End</label>
-          <input type="time" step="900" value={endTime} onChange={(e) => setEnd(e.target.value)} />
+          <input type="time" step="900" value={endTime} onChange={(e) => setEnd(e.target.value)} disabled={isAllDay} />
+        </div>
+        <div className="modal-field">
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={isAllDay} onChange={(e) => setIsAllDay(e.target.checked)} />
+            All day
+          </label>
+        </div>
+        <div className="modal-field">
+          <label>Reminder</label>
+          <select value={reminderMode} onChange={(e) => setReminderMode(e.target.value)}>
+            <option value="default">Calendar default</option>
+            <option value="10">10 min before</option>
+            <option value="30">30 min before</option>
+            <option value="60">60 min before</option>
+            <option value="custom">Custom…</option>
+            <option value="none">None</option>
+          </select>
+          {reminderMode === "custom" && (
+            <input
+              style={{ marginTop: 8 }}
+              type="number"
+              min="0"
+              step="1"
+              value={customReminder}
+              onChange={(e) => setCustomReminder(e.target.value)}
+              placeholder="Minutes before"
+            />
+          )}
         </div>
         <div className="modal-actions">
           <button onClick={handleConfirm}>Add Event</button>
@@ -740,8 +863,34 @@ function App() {
     setAddEventSlot({ day: dayIndex, startMinute });
   }
 
-  function confirmAddEvent({ title, day, startMinute, endMinute }) {
+  async function confirmAddEvent({ title, day, startMinute, endMinute, isAllDay, reminderMinutes }) {
     const activeWeekKey = weekKeyFromDate(currentWeekStart);
+    setCalendarStatus("Adding event…");
+
+    // If Google is connected, create the event in Google Calendar and reflect it locally.
+    if (googleAccessToken) {
+      try {
+        const created = await createGoogleCalendarEvent(googleAccessToken, {
+          weekStart: currentWeekStart,
+          day,
+          title,
+          startMinute,
+          endMinute,
+          isAllDay: Boolean(isAllDay),
+          reminderMinutes,
+        });
+        setCalendarEvents((prev) => [...prev, created]);
+        setCalendarStatus("Added to Google Calendar.");
+        setAddEventSlot(null);
+        setCalSuggestions((prev) =>
+          prev.filter((s) => s.day !== day || s.endMinute <= created.startMinute || s.startMinute >= created.endMinute)
+        );
+        return;
+      } catch (err) {
+        setCalendarStatus(`Failed to add to Google Calendar; added locally instead. (${err.message})`);
+      }
+    }
+
     const newEv = {
       id: `cal-${calEventIdCounter.current++}`,
       title,
@@ -752,9 +901,7 @@ function App() {
       weekKey: activeWeekKey,
     };
     setCalendarEvents((prev) => [...prev, newEv]);
-    setCalendarStatus("Manual event added.");
     setAddEventSlot(null);
-    // Clear any suggestions that now overlap this slot
     setCalSuggestions((prev) =>
       prev.filter((s) => s.day !== day || s.endMinute <= startMinute || s.startMinute >= newEv.endMinute)
     );

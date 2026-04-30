@@ -75,3 +75,90 @@ export async function fetchGoogleCalendarEvents(accessToken, targetWeekStart) {
   return { weekKey: selectedWeekKey, events: mapped };
 }
 
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function minutesToHhMm(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${pad2(h)}:${pad2(m)}`;
+}
+
+function buildDateTimeIsoLocal({ baseDate, minutesFromMidnight }) {
+  const d = new Date(baseDate);
+  d.setHours(0, 0, 0, 0);
+  const hhmm = minutesToHhMm(minutesFromMidnight);
+  const datePart = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${datePart}T${hhmm}:00`;
+}
+
+/**
+ * Create a Google Calendar event on the user's primary calendar.
+ *
+ * Returns a mapped "calendar event" for display in the weekly grid.
+ */
+export async function createGoogleCalendarEvent(accessToken, {
+  weekStart,
+  day,
+  title,
+  startMinute,
+  endMinute,
+  isAllDay = false,
+  reminderMinutes = null, // null => calendar default; 0 => none; number => popup minutes
+}) {
+  if (!accessToken) throw new Error("Missing Google access token.");
+  if (!title?.trim()) throw new Error("Event title is required.");
+
+  const selectedWeekStart = getWeekStart(weekStart);
+  const selectedWeekKey = weekKeyFromDate(selectedWeekStart);
+  const dayDate = addDays(selectedWeekStart, day);
+
+  const timeZone =
+    (typeof Intl !== "undefined" && Intl.DateTimeFormat?.().resolvedOptions?.().timeZone) ||
+    "UTC";
+
+  const safeStart = Number.isFinite(startMinute) ? startMinute : 0;
+  const safeEnd = Number.isFinite(endMinute) && endMinute > safeStart ? endMinute : safeStart + 60;
+
+  const eventResource = {
+    summary: title.trim(),
+    ...(isAllDay
+      ? {
+          start: { date: dayDate.toISOString().slice(0, 10) },
+          // For all-day events, Google expects end.date to be the day *after* the last day.
+          end: { date: addDays(dayDate, 1).toISOString().slice(0, 10) },
+        }
+      : {
+          start: { dateTime: buildDateTimeIsoLocal({ baseDate: dayDate, minutesFromMidnight: safeStart }), timeZone },
+          end: { dateTime: buildDateTimeIsoLocal({ baseDate: dayDate, minutesFromMidnight: safeEnd }), timeZone },
+        }),
+    reminders:
+      reminderMinutes == null
+        ? { useDefault: true }
+        : reminderMinutes === 0
+          ? { useDefault: false, overrides: [] }
+          : { useDefault: false, overrides: [{ method: "popup", minutes: Number(reminderMinutes) }] },
+  };
+
+  const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(eventResource),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Calendar create failed (${res.status}): ${text}`);
+  }
+
+  const created = await res.json();
+  const mapped = calendarEventFromGoogleEvent(created, selectedWeekStart);
+  if (!mapped) throw new Error("Created event could not be mapped for display.");
+
+  return { ...mapped, weekKey: selectedWeekKey };
+}
+
