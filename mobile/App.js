@@ -1,5 +1,5 @@
 import { StatusBar } from "expo-status-bar";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -96,6 +96,76 @@ function toDateInputValue(dateValue) {
 function toGoogleDueDate(dateValue) {
   if (!dateValue) return null;
   return `${dateValue}T12:00:00.000Z`;
+}
+
+function safeDateLabel(isoString, { fallback = "None", options = undefined } = {}) {
+  if (!isoString) return fallback;
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return fallback;
+  try {
+    return options ? d.toLocaleDateString("en-US", options) : d.toLocaleDateString();
+  } catch {
+    return fallback;
+  }
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function buildTimeOptions({ startHour = CAL_START_HOUR, endHour = CAL_END_HOUR, stepMinutes = 15 } = {}) {
+  const start = clamp(startHour, 0, 23) * 60;
+  const end = clamp(endHour, 1, 24) * 60;
+  const out = [];
+  for (let m = start; m <= end - stepMinutes; m += stepMinutes) out.push(m);
+  return out;
+}
+
+function TimePickerModal({ visible, title, selectedMinute, onSelect, onClose }) {
+  const options = useMemo(() => buildTimeOptions(), []);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const idx = Math.max(0, options.indexOf(selectedMinute));
+    // itemHeight matches styles.timeOption height below
+    const itemHeight = 44;
+    const y = Math.max(0, idx * itemHeight - itemHeight * 3);
+    const t = setTimeout(() => scrollRef.current?.scrollTo?.({ y, animated: false }), 0);
+    return () => clearTimeout(t);
+  }, [visible, selectedMinute, options]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={[styles.modalBox, { paddingBottom: 8 }]} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.profileHeaderRow}>
+            <Text style={styles.modalTitle}>{title}</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Ionicons name="close" size={22} color={stylesVars.fgMuted} />
+            </Pressable>
+          </View>
+
+          <ScrollView ref={scrollRef} style={{ maxHeight: 320 }} contentContainerStyle={{ paddingBottom: 6 }}>
+            {options.map((m) => {
+              const on = m === selectedMinute;
+              return (
+                <Pressable
+                  key={m}
+                  onPress={() => onSelect(m)}
+                  style={[styles.timeOption, on ? styles.timeOptionOn : null]}
+                >
+                  <Text style={[styles.timeOptionText, on ? styles.timeOptionTextOn : null]}>
+                    {minutesToTimeInput(m)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
 }
 
 async function fetchGroqJson(promptText, apiKey) {
@@ -291,10 +361,6 @@ function ProfileModal({ visible, onClose, state }) {
             <Pressable style={styles.primaryBtn} onPress={connectGoogle} disabled={state.isConnecting}>
               <Text style={styles.primaryBtnText}>{state.isConnecting ? "Connecting…" : "Connect"}</Text>
             </Pressable>
-            <View style={styles.spacer8} />
-            <Pressable style={styles.ghostBtn} onPress={disconnect}>
-              <Text style={styles.ghostBtnText}>Disconnect</Text>
-            </Pressable>
           </View>
 
           <View style={styles.spacer12} />
@@ -305,9 +371,10 @@ function ProfileModal({ visible, onClose, state }) {
           <Pressable style={styles.ghostBtn} onPress={syncCalendar} disabled={state.isSyncingCal}>
             <Text style={styles.ghostBtnText}>{state.isSyncingCal ? "Syncing…" : "Sync Google Calendar"}</Text>
           </Pressable>
-
-          <View style={styles.spacer12} />
-          <Text style={styles.subtle}>Tip: keep using “Suggest Schedule” from the Calendar tab.</Text>
+          <View style={styles.spacer8} />
+          <Pressable onPress={disconnect} hitSlop={10} style={styles.signOutBtn} accessibilityRole="button">
+            <Text style={styles.signOutText}>Sign out</Text>
+          </Pressable>
         </Pressable>
       </Pressable>
     </Modal>
@@ -395,12 +462,12 @@ function GoalsTasksScreen({ state }) {
     state.setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, completed: !t.completed } : t)));
   }
 
-  function renderSwipeAction(label, onPress, variant = "default") {
-    const bg = variant === "danger" ? "#3B0A0A" : "#1C2740";
-    const fg = variant === "danger" ? "#FFD6D6" : "#D7DEFF";
+  function renderSwipeActionIcon(iconName, onPress, variant = "default") {
+    const bg = variant === "danger" ? "#000" : "#000";
+    const fg = "#fff";
     return (
       <Pressable onPress={onPress} style={[styles.swipeAction, { backgroundColor: bg }]}>
-        <Text style={[styles.swipeActionText, { color: fg }]}>{label}</Text>
+        <Ionicons name={iconName} size={20} color={fg} />
       </Pressable>
     );
   }
@@ -426,7 +493,7 @@ function GoalsTasksScreen({ state }) {
           renderItem={({ item }) => (
             <Swipeable
               renderRightActions={() =>
-                renderSwipeAction("Edit", () => startEditingGoal(item))
+                renderSwipeActionIcon("create-outline", () => startEditingGoal(item))
               }
             >
               <View style={styles.listRow}>
@@ -452,8 +519,8 @@ function GoalsTasksScreen({ state }) {
             <Swipeable
               renderRightActions={() => (
                 <View style={styles.swipeActionsRow}>
-                  {renderSwipeAction("Edit", () => startEditingTask(item))}
-                  {renderSwipeAction(item.completed ? "Uncomplete" : "Complete", () => toggleTaskCompleted(item.id))}
+                  {renderSwipeActionIcon("create-outline", () => startEditingTask(item))}
+                  {renderSwipeActionIcon(item.completed ? "arrow-undo-outline" : "checkmark-outline", () => toggleTaskCompleted(item.id))}
                 </View>
               )}
             >
@@ -461,10 +528,9 @@ function GoalsTasksScreen({ state }) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.listTitle}>{item.title}</Text>
                   <Text style={styles.subtle}>
-                    Due: {item.due ? new Date(item.due).toLocaleDateString() : "None"} · {item.source}
+                    Due: {safeDateLabel(item.due)} · {item.source}
                   </Text>
                 </View>
-                <Text style={styles.badge}>I{item.importance}</Text>
               </View>
             </Swipeable>
           )}
@@ -567,14 +633,12 @@ function MatrixScreen({ state }) {
             ) : (
               (groups[item.key] || []).slice(0, 8).map((t) => (
                 <View key={t.id} style={styles.matrixTaskRow}>
-                  <View style={styles.matrixDot} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.listTitle} numberOfLines={1}>{t.title}</Text>
                     <Text style={styles.subtle}>
-                      Due: {t.due ? new Date(t.due).toLocaleDateString() : "None"}
+                      Due: {safeDateLabel(t.due)}
                     </Text>
                   </View>
-                  <Text style={styles.badge}>I{t.importance}</Text>
                 </View>
               ))
             )}
@@ -1003,11 +1067,12 @@ ${JSON.stringify(prioritized)}
 
 function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
   const [title, setTitle] = useState("");
-  const [startTime, setStartTime] = useState(minutesToTimeInput(slot.startMinute));
-  const [endTime, setEndTime] = useState(minutesToTimeInput(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60)));
+  const [startMinute, setStartMinute] = useState(slot.startMinute);
+  const [endMinute, setEndMinute] = useState(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60));
   const [isAllDay, setIsAllDay] = useState(false);
   const [reminderMode, setReminderMode] = useState("default"); // default | none | 10 | 30 | 60 | custom
   const [customReminder, setCustomReminder] = useState("15");
+  const [picking, setPicking] = useState(null); // "start" | "end" | null
   const dayLabel = addDays(weekStart, slot.day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 
   function handleConfirm() {
@@ -1027,8 +1092,8 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
     onConfirm({
       title: title.trim(),
       day: slot.day,
-      startMinute: isAllDay ? 0 : timeStringToMinutes(startTime),
-      endMinute: isAllDay ? 24 * 60 : timeStringToMinutes(endTime),
+      startMinute: isAllDay ? 0 : startMinute,
+      endMinute: isAllDay ? 24 * 60 : Math.max(endMinute, startMinute + 15),
       isAllDay,
       reminderMinutes,
     });
@@ -1042,9 +1107,25 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
           <Text style={styles.modalTitle}>Add Event — {dayLabel}</Text>
           <TextInput style={styles.input} placeholder="Event title" value={title} onChangeText={setTitle} />
           <View style={styles.spacer8} />
-          <TextInput style={[styles.input, isAllDay ? { opacity: 0.5 } : null]} editable={!isAllDay} placeholder="Start (HH:MM)" value={startTime} onChangeText={setStartTime} />
+          <Text style={styles.label}>Start</Text>
+          <Pressable
+            disabled={isAllDay}
+            onPress={() => setPicking("start")}
+            style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
+          >
+            <Text style={styles.timeFieldText}>{minutesToTimeInput(startMinute)}</Text>
+            <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
+          </Pressable>
           <View style={styles.spacer8} />
-          <TextInput style={[styles.input, isAllDay ? { opacity: 0.5 } : null]} editable={!isAllDay} placeholder="End (HH:MM)" value={endTime} onChangeText={setEndTime} />
+          <Text style={styles.label}>End</Text>
+          <Pressable
+            disabled={isAllDay}
+            onPress={() => setPicking("end")}
+            style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
+          >
+            <Text style={styles.timeFieldText}>{minutesToTimeInput(endMinute)}</Text>
+            <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
+          </Pressable>
           <View style={styles.spacer8} />
           <Pressable onPress={() => setIsAllDay((p) => !p)} style={styles.row} accessibilityRole="checkbox">
             <View style={[styles.checkbox, isAllDay ? styles.checkboxOn : null]} />
@@ -1089,6 +1170,28 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
           </View>
         </Pressable>
       </Pressable>
+      <TimePickerModal
+        visible={picking === "start"}
+        title="Start time"
+        selectedMinute={startMinute}
+        onClose={() => setPicking(null)}
+        onSelect={(m) => {
+          setStartMinute(m);
+          if (endMinute <= m) setEndMinute(Math.min(m + 60, CAL_END_HOUR * 60));
+          setPicking(null);
+        }}
+      />
+      <TimePickerModal
+        visible={picking === "end"}
+        title="End time"
+        selectedMinute={endMinute}
+        onClose={() => setPicking(null)}
+        onSelect={(m) => {
+          const minEnd = startMinute + 15;
+          setEndMinute(Math.max(m, minEnd));
+          setPicking(null);
+        }}
+      />
     </Modal>
   );
 }
@@ -1254,6 +1357,46 @@ const styles = StyleSheet.create({
   pillTextOn: {
     color: "#fff",
   },
+  timeField: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: stylesVars.card2,
+    borderColor: stylesVars.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  timeFieldDisabled: {
+    opacity: 0.5,
+  },
+  timeFieldText: {
+    color: stylesVars.fg,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
+  timeOption: {
+    height: 44,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: stylesVars.card2,
+    marginBottom: 8,
+  },
+  timeOptionOn: {
+    backgroundColor: "#111",
+    borderColor: "#111",
+  },
+  timeOptionText: {
+    color: stylesVars.fg,
+    fontWeight: "900",
+  },
+  timeOptionTextOn: {
+    color: "#fff",
+  },
   spacer8: { width: 8, height: 8 },
   spacer12: { width: 12, height: 12 },
   input: {
@@ -1380,6 +1523,18 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.2,
   },
+  signOutBtn: {
+    alignSelf: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  signOutText: {
+    color: stylesVars.fgMuted,
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+    textDecorationLine: "underline",
+  },
   outlineBtn: {
     borderColor: stylesVars.border,
     borderWidth: 1,
@@ -1419,14 +1574,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: 1,
     borderTopColor: stylesVars.border,
-  },
-  matrixDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 99,
-    borderWidth: 1,
-    borderColor: stylesVars.border,
-    backgroundColor: stylesVars.card2,
   },
   modalActions: {
     flexDirection: "row",
