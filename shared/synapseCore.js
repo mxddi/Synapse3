@@ -65,7 +65,7 @@ export function minutesToDisplay(minutes) {
 }
 
 export function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitleById = new Map(), idFactory = null) {
-  return (Array.isArray(rawSuggestions) ? rawSuggestions : [])
+  const normalized = (Array.isArray(rawSuggestions) ? rawSuggestions : [])
     .map((s, idx) => {
       const taskId = s.taskId || s.task_id || "";
       const resolvedTitle =
@@ -93,7 +93,36 @@ export function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitl
     .filter((s) => {
       const blocks = busyByDay[s.day] || [];
       return !blocks.some((b) => s.startMinute < b.endMinute && s.endMinute > b.startMinute);
-    })
+    });
+
+  // Enforce at most one suggestion per task (AI sometimes repeats the same task across multiple slots).
+  // When taskId is missing, fall back to normalized title so the same task string can't occupy 5 slots.
+  const bestByTaskId = new Map();
+  for (const s of normalized) {
+    const idKey = String(s.taskId || "").trim();
+    const titleKey = String(s.taskTitle || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    const key = idKey ? `id:${idKey}` : titleKey ? `ttl:${titleKey}` : `sug:${String(s.sugId)}`;
+
+    const prev = bestByTaskId.get(key);
+    if (!prev) {
+      bestByTaskId.set(key, s);
+      continue;
+    }
+
+    const prevDur = prev.endMinute - prev.startMinute;
+    const nextDur = s.endMinute - s.startMinute;
+    const better =
+      nextDur > prevDur ||
+      (nextDur === prevDur && s.startMinute < prev.startMinute) ||
+      (nextDur === prevDur && s.startMinute === prev.startMinute && s.endMinute < prev.endMinute);
+    if (better) bestByTaskId.set(key, s);
+  }
+
+  return Array.from(bestByTaskId.values())
+    .sort((a, b) => (a.day - b.day) || (a.startMinute - b.startMinute) || (a.endMinute - b.endMinute))
     .slice(0, 6);
 }
 

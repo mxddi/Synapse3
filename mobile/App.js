@@ -1,11 +1,10 @@
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,14 +12,28 @@ import {
   View,
 } from "react-native";
 import { Platform } from "react-native";
-import { NavigationContainer } from "@react-navigation/native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { NavigationContainer, useFocusEffect } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { GestureHandlerRootView, Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 import { createGoogleCalendarEvent, fetchGoogleCalendarEvents, fetchGoogleTasks, updateGoogleTask } from "../shared/googleApis";
-import { addDays, CAL_END_HOUR, CAL_START_HOUR, getQuadrant, getWeekStart, minutesToDisplay, normalizeAndLimitSuggestions, urgencyScoreFromDueDate, weekKeyFromDate } from "../shared/synapseCore";
+import {
+  addDays,
+  buildFallbackImportance,
+  CAL_END_HOUR,
+  CAL_START_HOUR,
+  getQuadrant,
+  getWeekStart,
+  minutesToDisplay,
+  normalizeAndLimitSuggestions,
+  urgencyScoreFromDueDate,
+  weekKeyFromDate,
+} from "../shared/synapseCore";
 import { disconnectGoogle, getGoogleAccessToken } from "./src/auth/googleAuth";
+import { GoalPlanScreen } from "./src/screens/GoalPlanScreen";
 
 const Tab = createBottomTabNavigator();
 
@@ -78,8 +91,9 @@ function timeStringToMinutes(str) {
 }
 
 function minutesToTimeInput(minutes) {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
+  const total = safeCalendarMinute(minutes, CAL_START_HOUR * 60);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
@@ -113,6 +127,41 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+/** Calendar grid uses [CAL_START_HOUR, CAL_END_HOUR); keep pickers in range. */
+function safeCalendarMinute(minutes, fallback = CAL_START_HOUR * 60) {
+  const n = Number(minutes);
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(Math.round(n), CAL_START_HOUR * 60, CAL_END_HOUR * 60 - 1);
+}
+
+function snapMinutesToStep(minutes, step = 15) {
+  const s = safeCalendarMinute(minutes);
+  const snapped = Math.round(s / step) * step;
+  return clamp(snapped, CAL_START_HOUR * 60, CAL_END_HOUR * 60 - step);
+}
+
+function minutesToWallDate(weekStart, dayIndex, minutes) {
+  const d = addDays(weekStart, dayIndex);
+  const m = safeCalendarMinute(minutes);
+  d.setHours(Math.floor(m / 60), m % 60, 0, 0);
+  return d;
+}
+
+function dateToCalendarMinutes(date) {
+  if (!date || Number.isNaN(date.getTime())) return CAL_START_HOUR * 60;
+  return safeCalendarMinute(date.getHours() * 60 + date.getMinutes());
+}
+
+function formatTimeField(weekStart, dayIndex, minutes) {
+  const d = minutesToWallDate(weekStart, dayIndex, minutes);
+  if (Number.isNaN(d.getTime())) return "—";
+  try {
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return minutesToTimeInput(minutes);
+  }
+}
+
 function buildTimeOptions({ startHour = CAL_START_HOUR, endHour = CAL_END_HOUR, stepMinutes = 15 } = {}) {
   const start = clamp(startHour, 0, 23) * 60;
   const end = clamp(endHour, 1, 24) * 60;
@@ -121,50 +170,85 @@ function buildTimeOptions({ startHour = CAL_START_HOUR, endHour = CAL_END_HOUR, 
   return out;
 }
 
-function TimePickerModal({ visible, title, selectedMinute, onSelect, onClose }) {
+function nearestTimeOptionMinute(target, options) {
+  const t = safeCalendarMinute(target, options[0] ?? CAL_START_HOUR * 60);
+  let best = options[0];
+  let bestDist = Infinity;
+  for (const o of options) {
+    const d = Math.abs(o - t);
+    if (d < bestDist) {
+      bestDist = d;
+      best = o;
+    }
+  }
+  return best;
+}
+
+function TimePickerPanel({ title, selectedMinute, onSelect, onBack }) {
   const options = useMemo(() => buildTimeOptions(), []);
   const scrollRef = useRef(null);
+  const resolved = nearestTimeOptionMinute(selectedMinute, options);
 
   useEffect(() => {
-    if (!visible) return;
-    const idx = Math.max(0, options.indexOf(selectedMinute));
-    // itemHeight matches styles.timeOption height below
+    const idx = Math.max(0, options.indexOf(resolved));
     const itemHeight = 44;
     const y = Math.max(0, idx * itemHeight - itemHeight * 3);
     const t = setTimeout(() => scrollRef.current?.scrollTo?.({ y, animated: false }), 0);
     return () => clearTimeout(t);
-  }, [visible, selectedMinute, options]);
+  }, [resolved, options]);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={[styles.modalBox, { paddingBottom: 8 }]} onPress={(e) => e.stopPropagation()}>
-          <View style={styles.profileHeaderRow}>
-            <Text style={styles.modalTitle}>{title}</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Ionicons name="close" size={22} color={stylesVars.fgMuted} />
-            </Pressable>
-          </View>
-
-          <ScrollView ref={scrollRef} style={{ maxHeight: 320 }} contentContainerStyle={{ paddingBottom: 6 }}>
-            {options.map((m) => {
-              const on = m === selectedMinute;
-              return (
-                <Pressable
-                  key={m}
-                  onPress={() => onSelect(m)}
-                  style={[styles.timeOption, on ? styles.timeOptionOn : null]}
-                >
-                  <Text style={[styles.timeOptionText, on ? styles.timeOptionTextOn : null]}>
-                    {minutesToTimeInput(m)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+    <>
+      <View style={[styles.profileHeaderRow, { marginBottom: 8 }]}>
+        <Text style={styles.modalTitleNoMb}>{title}</Text>
+        <Pressable onPress={onBack} hitSlop={10}>
+          <Ionicons name="close" size={22} color={stylesVars.fgMuted} />
         </Pressable>
-      </Pressable>
-    </Modal>
+      </View>
+      <ScrollView ref={scrollRef} style={{ maxHeight: 320 }} contentContainerStyle={{ paddingBottom: 6 }}>
+        {options.map((m) => {
+          const on = m === resolved;
+          return (
+            <Pressable
+              key={m}
+              onPress={() => onSelect(m)}
+              style={[styles.timeOption, on ? styles.timeOptionOn : null]}
+            >
+              <Text style={[styles.timeOptionText, on ? styles.timeOptionTextOn : null]}>{minutesToTimeInput(m)}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </>
+  );
+}
+
+function NativeTimePickerPanel({ title, weekStart, dayIndex, minuteValue, onApplyMinute, onDone }) {
+  const value = useMemo(() => minutesToWallDate(weekStart, dayIndex, minuteValue), [weekStart, dayIndex, minuteValue]);
+
+  return (
+    <>
+      <View style={[styles.profileHeaderRow, { marginBottom: 8 }]}>
+        <Text style={styles.modalTitleNoMb}>{title}</Text>
+        <Pressable onPress={onDone} hitSlop={10} accessibilityRole="button">
+          <Text style={styles.timePickerDone}>Done</Text>
+        </Pressable>
+      </View>
+      <View style={styles.nativeTimePickerWrap}>
+        <DateTimePicker
+          value={value}
+          mode="time"
+          display="spinner"
+          minuteInterval={Platform.OS === "ios" ? 15 : undefined}
+          themeVariant="light"
+          onChange={(_, date) => {
+            if (!date) return;
+            const snapped = snapMinutesToStep(dateToCalendarMinutes(date), 15);
+            onApplyMinute(snapped);
+          }}
+        />
+      </View>
+    </>
   );
 }
 
@@ -270,7 +354,7 @@ function TopBar({ title, onPressProfile }) {
     <View style={styles.topBar}>
       <Text style={styles.topBarTitle}>{title}</Text>
       <Pressable onPress={onPressProfile} hitSlop={10} style={styles.topBarIconBtn} accessibilityLabel="Profile">
-        <Ionicons name="person-circle-outline" size={28} color={stylesVars.fg} />
+        <Ionicons name="person-circle-outline" size={40} color={stylesVars.fg} />
       </Pressable>
     </View>
   );
@@ -286,7 +370,7 @@ function ProfileModal({ visible, onClose, state }) {
     }
     state.setIsConnecting(true);
     try {
-      await getGoogleAccessToken({ clientId, forceReauth: true });
+      await getGoogleAccessToken({ clientId });
       state.setGoogleStatus("Connected to Google (Tasks + Calendar).");
     } catch (err) {
       state.setGoogleStatus(err?.message || "Google sign-in failed.");
@@ -473,7 +557,7 @@ function GoalsTasksScreen({ state }) {
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
       <TopBar title="Goals & Tasks" onPressProfile={() => setProfileOpen(true)} />
 
       <View style={styles.card}>
@@ -485,7 +569,9 @@ function GoalsTasksScreen({ state }) {
           <View style={styles.spacer8} />
           <TextInput style={[styles.input, styles.hoursInput]} placeholder="hrs" keyboardType="numeric" value={newGoalHours} onChangeText={setNewGoalHours} />
           <View style={styles.spacer8} />
-          <OutlineButton title="Add" onPress={addGoal} style={{ paddingHorizontal: 12, paddingVertical: 10 }} />
+          <Pressable onPress={addGoal} accessibilityRole="button" accessibilityLabel="Add goal" hitSlop={8} style={styles.iconAddGoalBtn}>
+            <Ionicons name="add" size={22} color="#fff" />
+          </Pressable>
         </View>
         <FlatList
           data={state.goals}
@@ -601,6 +687,12 @@ function GoalsTasksScreen({ state }) {
 
 function MatrixScreen({ state }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const groqKey = process.env.EXPO_PUBLIC_GROQ_KEY || "";
+  const [suggestionText, setSuggestionText] = useState("Generate suggestions to get coaching insights based on your matrix.");
+  const [matrixStatus, setMatrixStatus] = useState("");
+  const [isScoring, setIsScoring] = useState(false);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+
   const groups = useMemo(() => {
     const acc = {
       importantUrgent: [],
@@ -619,8 +711,106 @@ function MatrixScreen({ state }) {
     { key: "notImportantNotUrgent", title: "Not Important + Not Urgent" },
   ];
 
+  const quadrantCounts = useMemo(() => {
+    return state.scoredTasks.reduce(
+      (acc, t) => {
+        acc[t.quadrant] += 1;
+        return acc;
+      },
+      { importantUrgent: 0, notImportantUrgent: 0, importantNotUrgent: 0, notImportantNotUrgent: 0 }
+    );
+  }, [state.scoredTasks]);
+
+  function buildLocalMatrixSuggestion() {
+    const totalGoalHours = state.goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
+    const highPriority = state.scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
+    const lowLow = quadrantCounts.notImportantNotUrgent;
+
+    if (totalGoalHours > 50) {
+      return `You allotted ${totalGoalHours} hours across goals this week, which may be unrealistic. Consider trimming or deferring lower priority work.`;
+    }
+    if (lowLow > highPriority) {
+      return "You have more tasks in the Not Important / Not Urgent quadrant than in your top priority quadrant. Consider deleting, delegating, or scheduling less.";
+    }
+    if (highPriority === 0) {
+      return "Nothing is currently both Important and Urgent. Double-check deadlines and goal alignment so your week has clear top priorities.";
+    }
+    return "Nice distribution — keep protecting time for Important / Not Urgent work so urgent work doesn’t crowd out strategy.";
+  }
+
+  async function scoreImportanceWithGroq() {
+    if (!state.tasks.length) {
+      setMatrixStatus("No tasks to score.");
+      return;
+    }
+    if (!groqKey) {
+      setMatrixStatus("Set EXPO_PUBLIC_GROQ_KEY to enable AI scoring.");
+      return;
+    }
+
+    setIsScoring(true);
+    setMatrixStatus("Scoring importance…");
+    try {
+      const prompt = `
+Return strict JSON: {"scores":[{"taskId":"string","importance":1,"reason":"short"}]}
+Goals: ${JSON.stringify(state.goals)}
+Tasks: ${JSON.stringify(state.tasks.map((t) => ({ id: t.id, title: t.title, due: t.due, notes: t.notes })))}
+Rules: Score importance 1-4 by goal alignment. Include every task id.
+`;
+      const parsed = await fetchGroqJson(prompt, groqKey);
+      const map = new Map((parsed.scores || []).map((s) => [s.taskId, Number(s.importance)]));
+      state.setTasks((prev) =>
+        prev.map((t) => ({
+          ...t,
+          importance: [1, 2, 3, 4].includes(map.get(t.id)) ? map.get(t.id) : buildFallbackImportance(t, state.goals),
+        }))
+      );
+      setMatrixStatus("Importance scoring complete.");
+    } catch (err) {
+      state.setTasks((prev) => prev.map((t) => ({ ...t, importance: buildFallbackImportance(t, state.goals) })));
+      setMatrixStatus(`Scoring failed; used fallback (${err.message})`);
+    } finally {
+      setIsScoring(false);
+    }
+  }
+
+  async function generateMatrixSuggestions() {
+    const fallback = buildLocalMatrixSuggestion();
+    const scoredTasks = state.scoredTasks.map((t) => ({
+      title: t.title,
+      due: t.due,
+      urgency: t.urgency,
+      importance: t.importance,
+      quadrant: t.quadrant,
+    }));
+
+    if (!groqKey) {
+      setSuggestionText(`${fallback}\n\n(Local mode: add EXPO_PUBLIC_GROQ_KEY for AI coaching.)`);
+      setMatrixStatus("Groq key not set; showing local insight.");
+      return;
+    }
+
+    setIsSuggesting(true);
+    setMatrixStatus("Generating AI insight…");
+    try {
+      const prompt = `
+You are a productivity coach. Return strict JSON: {"suggestion":"2-4 sentences, actionable"}
+Goals with weekly hours: ${JSON.stringify(state.goals)}
+Tasks with urgency/importance/quadrant: ${JSON.stringify(scoredTasks)}
+`;
+      const parsed = await fetchGroqJson(prompt, groqKey);
+      setSuggestionText(parsed.suggestion || fallback);
+      setMatrixStatus("Suggestion ready.");
+    } catch (err) {
+      setSuggestionText(`${fallback}\n\n(AI fallback: ${err.message})`);
+      setMatrixStatus("AI suggestion failed; used local fallback.");
+    } finally {
+      setIsSuggesting(false);
+    }
+  }
+
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
       <TopBar title="Matrix" onPressProfile={() => setProfileOpen(true)} />
       <FlatList
         data={cells}
@@ -644,6 +834,18 @@ function MatrixScreen({ state }) {
             )}
           </View>
         )}
+        ListFooterComponent={(
+          <View style={[styles.card, { marginTop: 14 }]}>
+            <Text style={styles.h2}>Prioritization insights</Text>
+            <View style={[styles.row, { flexWrap: "wrap", gap: 8 }]}>
+              <OutlineButton title={isScoring ? "Scoring…" : "Score importance"} onPress={scoreImportanceWithGroq} disabled={isScoring} />
+              <OutlineButton title={isSuggesting ? "Analyzing…" : "Generate insight"} onPress={generateMatrixSuggestions} disabled={isSuggesting} />
+            </View>
+            {matrixStatus ? <Text style={styles.subtle}>{matrixStatus}</Text> : null}
+            <View style={{ height: 10 }} />
+            <Text style={styles.subtle}>{suggestionText}</Text>
+          </View>
+        )}
       />
       <ProfileModal visible={profileOpen} onClose={() => setProfileOpen(false)} state={state} />
     </SafeAreaView>
@@ -654,6 +856,36 @@ function CalendarScreen({ state }) {
   const weekKey = weekKeyFromDate(state.currentWeekStart);
   const groqKey = process.env.EXPO_PUBLIC_GROQ_KEY || "";
   const [profileOpen, setProfileOpen] = useState(false);
+  const [calendarMode, setCalendarMode] = useState("week"); // day | week | month
+  const [selectedDayIndex, setSelectedDayIndex] = useState(() => new Date().getDay()); // 0-6 within currentWeekStart week
+  const [monthAnchor, setMonthAnchor] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        // Prevent calendar modals / overlays from lingering when navigating away from this tab.
+        state.setAddEventSlot(null);
+      };
+    }, [state.setAddEventSlot])
+  );
+
+  function weekdayLetterFromIndex(dayIndex) {
+    return ["S", "M", "T", "W", "T", "F", "S"][dayIndex] || "";
+  }
+
+  function alignWeekTo(date) {
+    state.setCurrentWeekStart(getWeekStart(date));
+    setSelectedDayIndex(date.getDay());
+    const m = new Date(date);
+    m.setDate(1);
+    m.setHours(0, 0, 0, 0);
+    setMonthAnchor(m);
+  }
 
   const visible = useMemo(() => {
     return state.calendarEvents
@@ -757,7 +989,10 @@ function CalendarScreen({ state }) {
       weekKey: suggestion.weekKey || weekKeyFromDate(state.currentWeekStart),
     };
     state.setCalendarEvents((prev) => [...prev, newEv]);
-    state.setCalSuggestions((prev) => prev.filter((s) => s.sugId !== suggestion.sugId));
+    const tid = suggestion.taskId ? String(suggestion.taskId) : "";
+    state.setCalSuggestions((prev) =>
+      prev.filter((s) => s.sugId !== suggestion.sugId && (!tid || String(s.taskId || "") !== tid))
+    );
     state.setCalSugStatus("Suggestion added to your calendar!");
   }
 
@@ -852,6 +1087,7 @@ Rules:
 - Only schedule between ${CAL_START_HOUR * 60} and ${CAL_END_HOUR * 60}
 - Never overlap with busy blocks
 - Provide at most 6 suggestions total
+ - At most ONE suggestion per taskId
 
 Busy blocks:
 ${JSON.stringify(busySummary)}
@@ -884,10 +1120,17 @@ ${JSON.stringify(prioritized)}
   }
 
   const label = useMemo(() => {
+    if (calendarMode === "month") {
+      return monthAnchor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+    }
+    if (calendarMode === "day") {
+      const d = addDays(state.currentWeekStart, selectedDayIndex);
+      return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+    }
     const end = addDays(state.currentWeekStart, 6);
     const fmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    return `${fmt(state.currentWeekStart)} – ${fmt(end)}`;
-  }, [state.currentWeekStart]);
+    return `${fmt(state.currentWeekStart)} – ${fmt(end)}, ${end.getFullYear()}`;
+  }, [calendarMode, monthAnchor, selectedDayIndex, state.currentWeekStart]);
 
   const hours = useMemo(() => {
     const a = [];
@@ -895,11 +1138,19 @@ ${JSON.stringify(prioritized)}
     return a;
   }, []);
   const totalPx = hours.length * HOUR_PX;
+  const displayedDayIndices = useMemo(() => {
+    if (calendarMode === "day") return [selectedDayIndex];
+    return Array.from({ length: 7 }, (_, i) => i);
+  }, [calendarMode, selectedDayIndex]);
+
   const dayLabels = useMemo(() => {
-    return Array.from({ length: 7 }, (_, i) =>
-      addDays(state.currentWeekStart, i).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-    );
-  }, [state.currentWeekStart]);
+    return displayedDayIndices.map((dayIdx) => {
+      const d = addDays(state.currentWeekStart, dayIdx);
+      const letter = weekdayLetterFromIndex(d.getDay());
+      const md = d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
+      return { letter, md };
+    });
+  }, [displayedDayIndices, state.currentWeekStart]);
 
   const dayEvents = useMemo(() => {
     const map = Array.from({ length: 7 }, () => []);
@@ -917,20 +1168,100 @@ ${JSON.stringify(prioritized)}
     return map;
   }, [visibleSuggestions]);
 
+  const monthWeeks = useMemo(() => {
+    const year = monthAnchor.getFullYear();
+    const month = monthAnchor.getMonth();
+    const firstDow = new Date(year, month, 1).getDay(); // 0-6 Sun-Sat
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < firstDow; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+    while (cells.length % 7 !== 0) cells.push(null);
+    const weeks = [];
+    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+    return weeks;
+  }, [monthAnchor]);
+
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
       <TopBar title="Calendar" onPressProfile={() => setProfileOpen(true)} />
 
       <View style={styles.card}>
-        <Text style={styles.h2}>Week</Text>
+        <View style={styles.calendarCardHeader}>
+          <Text style={styles.h2}>
+            {calendarMode === "day" ? "Day" : calendarMode === "month" ? "Month" : "Week"}
+          </Text>
+          <View style={styles.calViewSwitch}>
+            <Pressable
+              onPress={() => setCalendarMode("day")}
+              style={[styles.calViewBtn, calendarMode === "day" ? styles.calViewBtnOn : null]}
+              accessibilityRole="button"
+              accessibilityLabel="Day view"
+            >
+              <Ionicons name="today-outline" size={18} color={calendarMode === "day" ? "#fff" : stylesVars.fg} />
+            </Pressable>
+            <Pressable
+              onPress={() => setCalendarMode("week")}
+              style={[styles.calViewBtn, calendarMode === "week" ? styles.calViewBtnOn : null]}
+              accessibilityRole="button"
+              accessibilityLabel="Week view"
+            >
+              <Ionicons name="grid-outline" size={18} color={calendarMode === "week" ? "#fff" : stylesVars.fg} />
+            </Pressable>
+            <Pressable
+              onPress={() => setCalendarMode("month")}
+              style={[styles.calViewBtn, calendarMode === "month" ? styles.calViewBtnOn : null]}
+              accessibilityRole="button"
+              accessibilityLabel="Month view"
+            >
+              <Ionicons name="calendar-outline" size={18} color={calendarMode === "month" ? "#fff" : stylesVars.fg} />
+            </Pressable>
+          </View>
+        </View>
         <Text style={styles.subtle}>{label}</Text>
         <View style={styles.spacer12} />
         <View style={styles.row}>
-          <OutlineButton title="Prev" onPress={() => state.setCurrentWeekStart((w) => addDays(w, -7))} />
+          <OutlineButton
+            title="Prev"
+            onPress={() => {
+              if (calendarMode === "month") {
+                setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
+                return;
+              }
+              if (calendarMode === "day") {
+                if (selectedDayIndex > 0) {
+                  setSelectedDayIndex((d) => d - 1);
+                } else {
+                  state.setCurrentWeekStart((w) => addDays(w, -7));
+                  setSelectedDayIndex(6);
+                }
+                return;
+              }
+              state.setCurrentWeekStart((w) => addDays(w, -7));
+            }}
+          />
           <View style={styles.spacer8} />
-          <OutlineButton title="Today" onPress={() => state.setCurrentWeekStart(getWeekStart(new Date()))} />
+          <OutlineButton title="Today" onPress={() => alignWeekTo(new Date())} />
           <View style={styles.spacer8} />
-          <OutlineButton title="Next" onPress={() => state.setCurrentWeekStart((w) => addDays(w, 7))} />
+          <OutlineButton
+            title="Next"
+            onPress={() => {
+              if (calendarMode === "month") {
+                setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
+                return;
+              }
+              if (calendarMode === "day") {
+                if (selectedDayIndex < 6) {
+                  setSelectedDayIndex((d) => d + 1);
+                } else {
+                  state.setCurrentWeekStart((w) => addDays(w, 7));
+                  setSelectedDayIndex(0);
+                }
+                return;
+              }
+              state.setCurrentWeekStart((w) => addDays(w, 7));
+            }}
+          />
         </View>
         <View style={styles.spacer12} />
         <View style={styles.row}>
@@ -943,9 +1274,43 @@ ${JSON.stringify(prioritized)}
         {state.calSugStatus ? <Text style={styles.subtle}>{state.calSugStatus}</Text> : null}
       </View>
 
+      {calendarMode === "month" ? (
+        <View style={styles.card}>
+          <Text style={styles.h2}>Month overview</Text>
+          <Text style={styles.subtle}>Tap a day to open it in Day view.</Text>
+          <View style={{ height: 10 }} />
+          <View style={styles.monthDowRow}>
+            {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+              <Text key={i} style={styles.monthDowCell}>{d}</Text>
+            ))}
+          </View>
+          {monthWeeks.map((week, wi) => (
+            <View key={wi} style={styles.monthWeekRow}>
+              {week.map((d, di) => {
+                if (!d) return <View key={di} style={styles.monthDayCell} />;
+                const labelNum = String(d.getDate());
+                const inWeek =
+                  weekKeyFromDate(state.currentWeekStart) === weekKeyFromDate(getWeekStart(d));
+                return (
+                  <Pressable
+                    key={di}
+                    style={[styles.monthDayCell, inWeek ? styles.monthDayCellInWeek : null]}
+                    onPress={() => {
+                      alignWeekTo(d);
+                      setCalendarMode("day");
+                    }}
+                  >
+                    <Text style={styles.monthDayNum}>{labelNum}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      ) : (
+      <>
       <View style={styles.card}>
-        <Text style={styles.h2}>Weekly Calendar</Text>
-        <View style={styles.legendRow}>
+        <View style={[styles.legendRow, { marginTop: 0 }]}>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: EVENT_COLORS.google.bg }]} />
             <Text style={styles.legendText}>Google</Text>
@@ -966,7 +1331,8 @@ ${JSON.stringify(prioritized)}
           <View style={styles.calTimeGutter} />
           {dayLabels.map((d, i) => (
             <View key={i} style={styles.calDayHeader}>
-              <Text style={styles.calDayHeaderText} numberOfLines={1}>{d}</Text>
+              <Text style={styles.calDayHeaderLetter}>{d.letter}</Text>
+              <Text style={styles.calDayHeaderMd}>{d.md}</Text>
             </View>
           ))}
         </View>
@@ -981,7 +1347,7 @@ ${JSON.stringify(prioritized)}
               ))}
             </View>
 
-            {Array.from({ length: 7 }, (_, dayIdx) => (
+            {displayedDayIndices.map((dayIdx) => (
               <Pressable
                 key={dayIdx}
                 style={[styles.calDayCol, { height: totalPx }]}
@@ -1051,9 +1417,12 @@ ${JSON.stringify(prioritized)}
           </View>
         )}
       </View>
+      </>
+      )}
 
       {state.addEventSlot && (
         <AddEventModal
+          key={`${state.addEventSlot.day}-${state.addEventSlot.startMinute}`}
           slot={state.addEventSlot}
           weekStart={state.currentWeekStart}
           onConfirm={confirmAddEvent}
@@ -1066,9 +1435,15 @@ ${JSON.stringify(prioritized)}
 }
 
 function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
+  const initialStart = snapMinutesToStep(safeCalendarMinute(slot?.startMinute, CAL_START_HOUR * 60), 15);
+  const initialEnd = snapMinutesToStep(
+    Math.min(Math.max(initialStart + 60, initialStart + 15), CAL_END_HOUR * 60 - 1),
+    15
+  );
+
   const [title, setTitle] = useState("");
-  const [startMinute, setStartMinute] = useState(slot.startMinute);
-  const [endMinute, setEndMinute] = useState(Math.min(slot.startMinute + 60, CAL_END_HOUR * 60));
+  const [startMinute, setStartMinute] = useState(initialStart);
+  const [endMinute, setEndMinute] = useState(initialEnd);
   const [isAllDay, setIsAllDay] = useState(false);
   const [reminderMode, setReminderMode] = useState("default"); // default | none | 10 | 30 | 60 | custom
   const [customReminder, setCustomReminder] = useState("15");
@@ -1104,94 +1479,127 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
     <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable style={styles.modalBackdrop} onPress={onCancel}>
         <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.modalTitle}>Add Event — {dayLabel}</Text>
-          <TextInput style={styles.input} placeholder="Event title" value={title} onChangeText={setTitle} />
-          <View style={styles.spacer8} />
-          <Text style={styles.label}>Start</Text>
-          <Pressable
-            disabled={isAllDay}
-            onPress={() => setPicking("start")}
-            style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
-          >
-            <Text style={styles.timeFieldText}>{minutesToTimeInput(startMinute)}</Text>
-            <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
-          </Pressable>
-          <View style={styles.spacer8} />
-          <Text style={styles.label}>End</Text>
-          <Pressable
-            disabled={isAllDay}
-            onPress={() => setPicking("end")}
-            style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
-          >
-            <Text style={styles.timeFieldText}>{minutesToTimeInput(endMinute)}</Text>
-            <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
-          </Pressable>
-          <View style={styles.spacer8} />
-          <Pressable onPress={() => setIsAllDay((p) => !p)} style={styles.row} accessibilityRole="checkbox">
-            <View style={[styles.checkbox, isAllDay ? styles.checkboxOn : null]} />
-            <Text style={styles.checkboxLabel}>All day</Text>
-          </Pressable>
-          <View style={styles.spacer8} />
-          <Text style={styles.label}>Reminder</Text>
-          <View style={[styles.row, { flexWrap: "wrap" }]}>
-            {[
-              { id: "default", label: "Default" },
-              { id: "10", label: "10m" },
-              { id: "30", label: "30m" },
-              { id: "60", label: "60m" },
-              { id: "custom", label: "Custom" },
-              { id: "none", label: "None" },
-            ].map((opt) => (
-              <Pressable
-                key={opt.id}
-                onPress={() => setReminderMode(opt.id)}
-                style={[styles.pill, reminderMode === opt.id ? styles.pillOn : null]}
-              >
-                <Text style={[styles.pillText, reminderMode === opt.id ? styles.pillTextOn : null]}>{opt.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-          {reminderMode === "custom" && (
+          {picking ? (
             <>
+              {Platform.OS === "web" ? (
+                picking === "start" ? (
+                  <TimePickerPanel
+                    title="Start time"
+                    selectedMinute={startMinute}
+                    onBack={() => setPicking(null)}
+                    onSelect={(m) => {
+                      setStartMinute(m);
+                      if (endMinute <= m) setEndMinute(Math.min(m + 60, CAL_END_HOUR * 60 - 1));
+                      setPicking(null);
+                    }}
+                  />
+                ) : (
+                  <TimePickerPanel
+                    title="End time"
+                    selectedMinute={endMinute}
+                    onBack={() => setPicking(null)}
+                    onSelect={(m) => {
+                      const minEnd = startMinute + 15;
+                      setEndMinute(Math.max(m, minEnd));
+                      setPicking(null);
+                    }}
+                  />
+                )
+              ) : picking === "start" ? (
+                <NativeTimePickerPanel
+                  title="Start time"
+                  weekStart={weekStart}
+                  dayIndex={slot.day}
+                  minuteValue={startMinute}
+                  onApplyMinute={(snapped) => {
+                    setStartMinute(snapped);
+                    setEndMinute((e) => (e <= snapped ? Math.min(snapped + 60, CAL_END_HOUR * 60 - 1) : e));
+                  }}
+                  onDone={() => setPicking(null)}
+                />
+              ) : (
+                <NativeTimePickerPanel
+                  title="End time"
+                  weekStart={weekStart}
+                  dayIndex={slot.day}
+                  minuteValue={endMinute}
+                  onApplyMinute={(snapped) => {
+                    setEndMinute(Math.max(snapped, startMinute + 15));
+                  }}
+                  onDone={() => setPicking(null)}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={styles.modalTitle}>Add Event — {dayLabel}</Text>
+              <TextInput style={styles.input} placeholder="Event title" value={title} onChangeText={setTitle} />
               <View style={styles.spacer8} />
-              <TextInput
-                style={styles.input}
-                placeholder="Minutes before (e.g. 15)"
-                keyboardType="numeric"
-                value={customReminder}
-                onChangeText={setCustomReminder}
-              />
+              <Text style={styles.label}>Start</Text>
+              <Pressable
+                disabled={isAllDay}
+                onPress={() => setPicking("start")}
+                style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
+              >
+                <Text style={styles.timeFieldText}>{formatTimeField(weekStart, slot.day, startMinute)}</Text>
+                <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
+              </Pressable>
+              <View style={styles.spacer8} />
+              <Text style={styles.label}>End</Text>
+              <Pressable
+                disabled={isAllDay}
+                onPress={() => setPicking("end")}
+                style={[styles.timeField, isAllDay ? styles.timeFieldDisabled : null]}
+              >
+                <Text style={styles.timeFieldText}>{formatTimeField(weekStart, slot.day, endMinute)}</Text>
+                <Ionicons name="chevron-down" size={18} color={stylesVars.fgMuted} />
+              </Pressable>
+              <View style={styles.spacer8} />
+              <Pressable onPress={() => setIsAllDay((p) => !p)} style={styles.row} accessibilityRole="checkbox">
+                <View style={[styles.checkbox, isAllDay ? styles.checkboxOn : null]} />
+                <Text style={styles.checkboxLabel}>All day</Text>
+              </Pressable>
+              <View style={styles.spacer8} />
+              <Text style={styles.label}>Reminder</Text>
+              <View style={[styles.row, { flexWrap: "wrap" }]}>
+                {[
+                  { id: "default", label: "Default" },
+                  { id: "10", label: "10m" },
+                  { id: "30", label: "30m" },
+                  { id: "60", label: "60m" },
+                  { id: "custom", label: "Custom" },
+                  { id: "none", label: "None" },
+                ].map((opt) => (
+                  <Pressable
+                    key={opt.id}
+                    onPress={() => setReminderMode(opt.id)}
+                    style={[styles.pill, reminderMode === opt.id ? styles.pillOn : null]}
+                  >
+                    <Text style={[styles.pillText, reminderMode === opt.id ? styles.pillTextOn : null]}>{opt.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {reminderMode === "custom" && (
+                <>
+                  <View style={styles.spacer8} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Minutes before (e.g. 15)"
+                    keyboardType="numeric"
+                    value={customReminder}
+                    onChangeText={setCustomReminder}
+                  />
+                </>
+              )}
+              <View style={styles.modalActions}>
+                <OutlineButton title="Cancel" onPress={onCancel} />
+                <View style={styles.spacer8} />
+                <OutlineButton title="Add" onPress={handleConfirm} />
+              </View>
             </>
           )}
-          <View style={styles.modalActions}>
-            <OutlineButton title="Cancel" onPress={onCancel} />
-            <View style={styles.spacer8} />
-            <OutlineButton title="Add" onPress={handleConfirm} />
-          </View>
         </Pressable>
       </Pressable>
-      <TimePickerModal
-        visible={picking === "start"}
-        title="Start time"
-        selectedMinute={startMinute}
-        onClose={() => setPicking(null)}
-        onSelect={(m) => {
-          setStartMinute(m);
-          if (endMinute <= m) setEndMinute(Math.min(m + 60, CAL_END_HOUR * 60));
-          setPicking(null);
-        }}
-      />
-      <TimePickerModal
-        visible={picking === "end"}
-        title="End time"
-        selectedMinute={endMinute}
-        onClose={() => setPicking(null)}
-        onSelect={(m) => {
-          const minEnd = startMinute + 15;
-          setEndMinute(Math.max(m, minEnd));
-          setPicking(null);
-        }}
-      />
     </Modal>
   );
 }
@@ -1199,33 +1607,47 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
 export default function App() {
   const state = useSynapseState();
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer>
-        <StatusBar style="auto" />
-        <Tab.Navigator
-          screenOptions={({ route }) => ({
-            headerShown: false,
-            tabBarShowLabel: false,
-            tabBarStyle: { backgroundColor: stylesVars.bg, borderTopColor: stylesVars.border },
-            tabBarActiveTintColor: stylesVars.fg,
-            tabBarInactiveTintColor: stylesVars.fgMuted,
-            tabBarIcon: ({ color, size }) => {
-              const name =
-                route.name === "Tasks"
-                  ? "checkbox-outline"
-                  : route.name === "Matrix"
-                    ? "grid-outline"
-                    : "calendar-outline";
-              return <Ionicons name={name} size={size ?? 22} color={color} />;
-            },
-          })}
-        >
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: stylesVars.bg }}>
+        <NavigationContainer>
+          <StatusBar style="auto" />
+          <Tab.Navigator
+            screenOptions={({ route }) => ({
+              headerShown: false,
+              tabBarShowLabel: false,
+              tabBarHideOnKeyboard: true,
+              tabBarStyle: {
+                backgroundColor: stylesVars.bg,
+                borderTopColor: stylesVars.border,
+                height: Platform.OS === "ios" ? 86 : 72,
+                paddingTop: 10,
+                paddingBottom: Platform.OS === "ios" ? 22 : 14,
+                paddingHorizontal: 12,
+              },
+              tabBarItemStyle: { paddingTop: 2 },
+              tabBarActiveTintColor: stylesVars.fg,
+              tabBarInactiveTintColor: stylesVars.fgMuted,
+              tabBarIcon: ({ color, size }) => {
+                const name =
+                  route.name === "Tasks"
+                    ? "checkbox-outline"
+                    : route.name === "Matrix"
+                      ? "grid-outline"
+                      : route.name === "Plan"
+                        ? "chatbubbles-outline"
+                      : "calendar-outline";
+                return <Ionicons name={name} size={size ?? 34} color={color} />;
+              },
+            })}
+          >
           <Tab.Screen name="Tasks" children={() => <GoalsTasksScreen state={state} />} />
           <Tab.Screen name="Matrix" children={() => <MatrixScreen state={state} />} />
+          <Tab.Screen name="Plan" children={() => <GoalPlanScreen state={state} />} />
           <Tab.Screen name="Calendar" children={() => <CalendarScreen state={state} />} />
         </Tab.Navigator>
       </NavigationContainer>
     </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
 
@@ -1244,7 +1666,9 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: stylesVars.bg,
-    padding: 18,
+    paddingTop: 12,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
   },
   h1: {
     fontSize: 32,
@@ -1357,6 +1781,14 @@ const styles = StyleSheet.create({
   pillTextOn: {
     color: "#fff",
   },
+  iconAddGoalBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "#111",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   timeField: {
     flexDirection: "row",
     alignItems: "center",
@@ -1458,20 +1890,42 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
     justifyContent: "center",
-    padding: 16,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
   },
   modalBox: {
     backgroundColor: stylesVars.card,
     borderColor: stylesVars.border,
     borderWidth: 1,
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 20,
+    padding: 18,
+    maxWidth: 420,
+    width: "100%",
+    alignSelf: "center",
   },
   modalTitle: {
     color: stylesVars.fg,
     fontSize: 16,
     fontWeight: "800",
     marginBottom: 10,
+  },
+  modalTitleNoMb: {
+    color: stylesVars.fg,
+    fontSize: 17,
+    fontWeight: "800",
+    flex: 1,
+    paddingRight: 8,
+  },
+  timePickerDone: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0B57D0",
+  },
+  nativeTimePickerWrap: {
+    width: "100%",
+    minHeight: Platform.OS === "ios" ? 216 : 200,
+    alignItems: "stretch",
+    justifyContent: "center",
   },
   profileHeaderRow: {
     flexDirection: "row",
@@ -1589,7 +2043,6 @@ const styles = StyleSheet.create({
   },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendDot: { width: 10, height: 10, borderRadius: 99 },
-  legendText: { color: "#AAB5D6", fontSize: 12 },
   legendText: { color: stylesVars.fgMuted, fontSize: 12 },
 
   calHeaderRow: {
@@ -1601,17 +2054,26 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   calTimeGutter: {
-    width: 56,
+    width: 76,
     position: "relative",
+    marginRight: 22,
   },
   calDayHeader: {
     flex: 1,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
+    alignItems: "center",
   },
-  calDayHeaderText: {
+  calDayHeaderLetter: {
+    color: stylesVars.fg,
+    fontSize: 12,
+    fontWeight: "950",
+    letterSpacing: 0.2,
+  },
+  calDayHeaderMd: {
+    marginTop: 2,
     color: stylesVars.fgMuted,
-    fontSize: 11,
-    fontWeight: "700",
+    fontSize: 10,
+    fontWeight: "800",
   },
   calBody: {
     flexDirection: "row",
@@ -1624,6 +2086,67 @@ const styles = StyleSheet.create({
     right: 0,
     color: "#6C7AA6",
     fontSize: 10,
+  },
+  calendarCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 6,
+  },
+  calViewSwitch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  calViewBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: stylesVars.card2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calViewBtnOn: {
+    backgroundColor: "#111",
+    borderColor: "#111",
+  },
+  monthDowRow: {
+    flexDirection: "row",
+    marginBottom: 6,
+  },
+  monthDowCell: {
+    flex: 1,
+    textAlign: "center",
+    color: stylesVars.fgMuted,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  monthWeekRow: {
+    flexDirection: "row",
+    marginBottom: 6,
+  },
+  monthDayCell: {
+    flex: 1,
+    aspectRatio: 1,
+    marginHorizontal: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: stylesVars.card2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  monthDayCellInWeek: {
+    borderColor: "#111",
+    backgroundColor: "#FFFFFF",
+  },
+  monthDayNum: {
+    color: stylesVars.fg,
+    fontWeight: "950",
+    fontSize: 13,
   },
   calDayCol: {
     flex: 1,
