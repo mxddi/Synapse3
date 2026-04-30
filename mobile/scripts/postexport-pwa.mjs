@@ -57,7 +57,16 @@ async function main() {
     '  <link rel="manifest" href="/web/manifest.json" />',
   ].join("\n");
 
-  const patched = injectIntoHead(html, injection);
+  let patched = injectIntoHead(html, injection);
+  // Respect display cutouts on notched devices (safe-area + avoids odd fixed overlays at edges)
+  patched = patched.replace(
+    /<meta\s+name="viewport"\s+content="([^"]*)"\s*\/?>/i,
+    (match, content) => {
+      if (/viewport-fit\s*=\s*cover/i.test(content)) return match;
+      const next = content.includes("viewport-fit") ? content : `${content},viewport-fit=cover`;
+      return `<meta name="viewport" content="${next}" />`;
+    }
+  );
   await fs.writeFile(indexPath, patched, "utf8");
 
   // eslint-disable-next-line no-console

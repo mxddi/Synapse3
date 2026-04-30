@@ -13,6 +13,7 @@ export const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SC
 type StoredToken = {
   accessToken: string;
   expiresAtMs: number;
+  refreshToken?: string | null;
   scope?: string;
 };
 
@@ -20,28 +21,52 @@ function nowMs() {
   return Date.now();
 }
 
-function isValid(token: StoredToken | null) {
+function isAccessTokenValid(token: StoredToken | null) {
   if (!token?.accessToken) return false;
   // give a small buffer so we don't fail mid-request
   return token.expiresAtMs - nowMs() > 60_000;
 }
 
+function webStorageAvailable() {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
 async function loadStoredToken(): Promise<StoredToken | null> {
-  const raw = await SecureStore.getItemAsync(TOKEN_KEY);
-  if (!raw) return null;
   try {
-    return JSON.parse(raw) as StoredToken;
+    const raw = await SecureStore.getItemAsync(TOKEN_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as StoredToken;
+    } catch {
+      return null;
+    }
   } catch {
-    return null;
+    if (!webStorageAvailable()) return null;
+    const raw = window.localStorage.getItem(TOKEN_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as StoredToken;
+    } catch {
+      return null;
+    }
   }
 }
 
 async function saveStoredToken(token: StoredToken) {
-  await SecureStore.setItemAsync(TOKEN_KEY, JSON.stringify(token));
+  try {
+    await SecureStore.setItemAsync(TOKEN_KEY, JSON.stringify(token));
+  } catch {
+    if (!webStorageAvailable()) throw new Error("Unable to persist Google token on this platform.");
+    window.localStorage.setItem(TOKEN_KEY, JSON.stringify(token));
+  }
 }
 
 export async function disconnectGoogle() {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  try {
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+  } catch {
+    if (webStorageAvailable()) window.localStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 /**
@@ -59,9 +84,44 @@ export async function getGoogleAccessToken({
   scopes?: string;
   forceReauth?: boolean;
 }): Promise<string> {
-  if (!forceReauth) {
-    const existing = await loadStoredToken();
-    if (isValid(existing)) return existing.accessToken;
+  const existing = forceReauth ? null : await loadStoredToken();
+  if (existing?.accessToken && isAccessTokenValid(existing)) return existing.accessToken;
+
+  // If we have a refresh token, refresh without opening a browser.
+  if (!forceReauth && existing?.refreshToken) {
+    const redirectUri = AuthSession.makeRedirectUri({ scheme: "synapse3" });
+    const discovery = {
+      authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+      tokenEndpoint: "https://oauth2.googleapis.com/token",
+    };
+
+    try {
+      const refreshed = await AuthSession.refreshAsync(
+        {
+          clientId,
+          refreshToken: existing.refreshToken,
+        },
+        discovery
+      );
+
+      const accessToken = refreshed.accessToken;
+      if (!accessToken) throw new Error("Google refresh did not return an access token.");
+
+      const expiresAtMs = refreshed.expiresIn
+        ? nowMs() + refreshed.expiresIn * 1000
+        : nowMs() + 3600 * 1000;
+
+      const next: StoredToken = {
+        accessToken,
+        expiresAtMs,
+        refreshToken: refreshed.refreshToken || existing.refreshToken,
+        scope: scopes,
+      };
+      await saveStoredToken(next);
+      return accessToken;
+    } catch {
+      // fall through to interactive auth
+    }
   }
 
   // SDK 54+ uses AuthRequest.promptAsync / exchangeCodeAsync (AuthSession.startAsync is not available).
@@ -81,8 +141,10 @@ export async function getGoogleAccessToken({
     responseType: AuthSession.ResponseType.Code,
     usePKCE: true,
     extraParams: {
-      // Keep this consistent with the web app behavior: always show consent so we can get both scopes.
-      prompt: "consent",
+      // Needed to obtain refresh tokens for long-lived sessions (best-effort).
+      access_type: "offline",
+      // Only force consent when explicitly re-authing; otherwise Google can return a silent-ish flow when possible.
+      ...(forceReauth ? { prompt: "consent" } : {}),
       include_granted_scopes: "true",
     },
   });
@@ -110,7 +172,14 @@ export async function getGoogleAccessToken({
   const expiresAtMs = tokenResponse.expiresIn
     ? nowMs() + tokenResponse.expiresIn * 1000
     : nowMs() + 3600 * 1000;
-  await saveStoredToken({ accessToken, expiresAtMs, scope: scopes });
+  const refreshToken =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (tokenResponse as any).refreshToken ||
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (tokenResponse as any).refresh_token ||
+    null;
+
+  await saveStoredToken({ accessToken, expiresAtMs, refreshToken: refreshToken || undefined, scope: scopes });
 
   return accessToken;
 }
