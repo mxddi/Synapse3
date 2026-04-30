@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "synapse3",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/app-icon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
@@ -24,12 +24,24 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/app-icon-foreground.png",
         "backgroundColor": "#ffffff"
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "output": "single",
+      "favicon": "./web/favicon.png",
+      "name": "Synapse",
+      "shortName": "Synapse",
+      "themeColor": "#000000",
+      "backgroundColor": "#ffffff",
+      "config": {
+        "pwa": {
+          "display": "standalone",
+          "themeColor": "#000000",
+          "backgroundColor": "#ffffff"
+        }
+      }
     },
     "extra": {
       "eas": {
