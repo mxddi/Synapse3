@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Synapse",
+    "slug": "synapse3",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "synapse3",
+    "icon": "./assets/app-icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.maddigregory.synapse3",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/app-icon-foreground.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./web/favicon.png",
+      "name": "Synapse",
+      "shortName": "Synapse",
+      "themeColor": "#000000",
+      "backgroundColor": "#ffffff",
+      "config": {
+        "pwa": {
+          "display": "standalone",
+          "themeColor": "#000000",
+          "backgroundColor": "#ffffff"
+        }
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "793a40ee-5f46-4f6b-b8c9-b9ffbfae1491"
+      }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
+        }
+      ],
+      "expo-secure-store",
+      "expo-web-browser"
+    ]
+  }
+}
