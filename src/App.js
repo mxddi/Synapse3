@@ -7,8 +7,8 @@ const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE}`;
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── Calendar display constants ───────────────────────────────────────────────
-const CAL_START_HOUR = 6;   // 6 AM
-const CAL_END_HOUR = 22;  // 10 PM
+const CAL_START_HOUR = 0; // midnight
+const CAL_END_HOUR = 24; // full day (exclusive end hour)
 const HOUR_PX = 64;  // px per hour in the grid
 
 const EVENT_COLORS = {
@@ -228,7 +228,7 @@ function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitleById =
     })
     .filter((s) => Number.isInteger(s.day) && s.day >= 0 && s.day <= 6)
     .filter((s) => Number.isFinite(s.startMinute) && Number.isFinite(s.endMinute))
-    .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60)
+    .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60 - 1)
     .filter((s) => s.startMinute < s.endMinute)
     .filter((s) => {
       const blocks = busyByDay[s.day] || [];
@@ -304,7 +304,7 @@ function WeeklyCalendar({ weekStart, calendarEvents, suggestions, onSlotClick, o
     const rect = e.currentTarget.getBoundingClientRect();
     const rawY = e.clientY - rect.top;
     const minute = Math.round(((rawY / HOUR_PX) * 60 + CAL_START_HOUR * 60) / 15) * 15;
-    const clamped = Math.max(CAL_START_HOUR * 60, Math.min((CAL_END_HOUR - 1) * 60, minute));
+    const clamped = Math.max(CAL_START_HOUR * 60, Math.min(CAL_END_HOUR * 60 - 1, minute));
     onSlotClick(dayIndex, clamped);
   }
 

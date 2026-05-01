@@ -1,8 +1,9 @@
 import { StatusBar } from "expo-status-bar";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -23,22 +24,28 @@ import { createGoogleCalendarEvent, fetchGoogleCalendarEvents, fetchGoogleTasks,
 import {
   addDays,
   buildFallbackImportance,
+  buildMatrixInsightFallback,
   CAL_END_HOUR,
   CAL_START_HOUR,
+  dueIsoToLocalDateAndTime,
+  formatTaskDueForDisplay,
   getQuadrant,
   getWeekStart,
+  localDateAndTimeToDueIso,
   minutesToDisplay,
   normalizeAndLimitSuggestions,
   urgencyScoreFromDueDate,
   weekKeyFromDate,
 } from "../shared/synapseCore";
-import { disconnectGoogle, getGoogleAccessToken } from "./src/auth/googleAuth";
+import { disconnectGoogle, getGoogleAccessToken, getGoogleProfilePhotoFromStorage } from "./src/auth/googleAuth";
 import { GoalPlanScreen } from "./src/screens/GoalPlanScreen";
 
 const Tab = createBottomTabNavigator();
 
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 const HOUR_PX = 56;
+/** First visible hour when the day/week grid mounts (user can scroll to midnight). */
+const CAL_INITIAL_SCROLL_HOUR = 7;
 
 const EVENT_COLORS = {
   google: { bg: "#4285F4", text: "#fff" },
@@ -72,17 +79,18 @@ const mockGoals = [
   { id: "g3", name: "Exercise and sleep consistency", weeklyHours: 4 },
 ];
 
-function inDays(days) {
+function isoEndOfDayFromToday(daysAhead, hour = 17, minute = 0) {
   const d = new Date();
-  d.setDate(d.getDate() + days);
+  d.setDate(d.getDate() + daysAhead);
+  d.setHours(hour, minute, 0, 0);
   return d.toISOString();
 }
 
 const mockTasks = [
-  { id: "t1", title: "Review binary trees notes", due: inDays(1), notes: "study" },
-  { id: "t2", title: "Design slides for demo", due: inDays(3), notes: "work project" },
-  { id: "t3", title: "Book dentist appointment", due: inDays(9), notes: "personal admin" },
-  { id: "t4", title: "Watch random YouTube", due: inDays(14), notes: "optional" },
+  { id: "t1", title: "Review binary trees notes", due: isoEndOfDayFromToday(1, 10, 0), notes: "study" },
+  { id: "t2", title: "Design slides for demo", due: isoEndOfDayFromToday(3, 14, 30), notes: "work project" },
+  { id: "t3", title: "Book dentist appointment", due: isoEndOfDayFromToday(9, 9, 0), notes: "personal admin" },
+  { id: "t4", title: "Watch random YouTube", due: isoEndOfDayFromToday(14, 20, 0), notes: "optional" },
 ];
 
 function timeStringToMinutes(str) {
@@ -107,11 +115,6 @@ function toDateInputValue(dateValue) {
   return `${year}-${month}-${day}`;
 }
 
-function toGoogleDueDate(dateValue) {
-  if (!dateValue) return null;
-  return `${dateValue}T12:00:00.000Z`;
-}
-
 function safeDateLabel(isoString, { fallback = "None", options = undefined } = {}) {
   if (!isoString) return fallback;
   const d = new Date(isoString);
@@ -127,7 +130,7 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-/** Calendar grid uses [CAL_START_HOUR, CAL_END_HOUR); keep pickers in range. */
+/** Calendar grid uses [CAL_START_HOUR, CAL_END_HOUR) hours; minutes clamped through end of day. */
 function safeCalendarMinute(minutes, fallback = CAL_START_HOUR * 60) {
   const n = Number(minutes);
   if (!Number.isFinite(n)) return fallback;
@@ -294,6 +297,22 @@ function useSynapseState() {
   const [googleStatus, setGoogleStatus] = useState("Not connected.");
   const [isConnecting, setIsConnecting] = useState(false);
   const [isImportingTasks, setIsImportingTasks] = useState(false);
+  const [googleProfilePhotoUrl, setGoogleProfilePhotoUrl] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const uri = await getGoogleProfilePhotoFromStorage();
+        if (!cancelled) setGoogleProfilePhotoUrl(uri || null);
+      } catch {
+        if (!cancelled) setGoogleProfilePhotoUrl(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [currentWeekStart, setCurrentWeekStart] = useState(() => getWeekStart(new Date()));
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -324,6 +343,8 @@ function useSynapseState() {
     scoredTasks,
     googleStatus,
     setGoogleStatus,
+    googleProfilePhotoUrl,
+    setGoogleProfilePhotoUrl,
     isConnecting,
     setIsConnecting,
     isImportingTasks,
@@ -349,15 +370,66 @@ function useSynapseState() {
   };
 }
 
-function TopBar({ title, onPressProfile }) {
+function TopBar({ title, onPressProfile, profilePhotoUri, taskSearch, onTaskSearchChange, taskSearchPlaceholder = "Search tasks" }) {
+  const [photoLoadFailed, setPhotoLoadFailed] = useState(false);
+  useEffect(() => {
+    setPhotoLoadFailed(false);
+  }, [profilePhotoUri]);
+  const showGooglePhoto = Boolean(profilePhotoUri) && !photoLoadFailed;
+
   return (
     <View style={styles.topBar}>
-      <Text style={styles.topBarTitle}>{title}</Text>
+      {onTaskSearchChange != null ? (
+        <View style={styles.topBarSearchWrap}>
+          <Ionicons name="search-outline" size={20} color={stylesVars.fgMuted} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.topBarSearchInput}
+            placeholder={taskSearchPlaceholder}
+            placeholderTextColor={stylesVars.fgMuted}
+            value={taskSearch ?? ""}
+            onChangeText={onTaskSearchChange}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+        </View>
+      ) : (
+        <Text style={styles.topBarTitle}>{title}</Text>
+      )}
       <Pressable onPress={onPressProfile} hitSlop={10} style={styles.topBarIconBtn} accessibilityLabel="Profile">
-        <Ionicons name="person-circle-outline" size={40} color={stylesVars.fg} />
+        {showGooglePhoto ? (
+          <Image
+            source={{ uri: profilePhotoUri }}
+            style={styles.topBarAvatar}
+            accessibilityIgnoresInvertColors
+            onError={() => setPhotoLoadFailed(true)}
+          />
+        ) : (
+          <Ionicons name="person-circle-outline" size={40} color={stylesVars.fg} />
+        )}
       </Pressable>
     </View>
   );
+}
+
+/** When weekly goals change, clear calendar AI suggestions so the user regenerates with up-to-date context. */
+function useRefreshSchedulingOnGoalsChange(goals, setCalSuggestions, setCalSugStatus) {
+  const sig = useMemo(
+    () => JSON.stringify(goals.map((g) => ({ id: g.id, name: g.name, h: g.weeklyHours }))),
+    [goals]
+  );
+  const primed = useRef(false);
+  const prevSig = useRef(sig);
+  useEffect(() => {
+    if (!primed.current) {
+      primed.current = true;
+      prevSig.current = sig;
+      return;
+    }
+    if (prevSig.current === sig) return;
+    prevSig.current = sig;
+    setCalSuggestions([]);
+    setCalSugStatus("Goals changed — tap Suggest Schedule to refresh.");
+  }, [sig, setCalSuggestions, setCalSugStatus]);
 }
 
 function ProfileModal({ visible, onClose, state }) {
@@ -372,6 +444,12 @@ function ProfileModal({ visible, onClose, state }) {
     try {
       await getGoogleAccessToken({ clientId });
       state.setGoogleStatus("Connected to Google (Tasks + Calendar).");
+      try {
+        const uri = await getGoogleProfilePhotoFromStorage();
+        state.setGoogleProfilePhotoUrl(uri || null);
+      } catch {
+        state.setGoogleProfilePhotoUrl(null);
+      }
     } catch (err) {
       state.setGoogleStatus(err?.message || "Google sign-in failed.");
     } finally {
@@ -381,6 +459,7 @@ function ProfileModal({ visible, onClose, state }) {
 
   async function disconnect() {
     await disconnectGoogle();
+    state.setGoogleProfilePhotoUrl(null);
     state.setGoogleStatus("Disconnected.");
   }
 
@@ -466,14 +545,30 @@ function ProfileModal({ visible, onClose, state }) {
 }
 
 function GoalsTasksScreen({ state }) {
+  const [taskQuery, setTaskQuery] = useState("");
   const [newGoalName, setNewGoalName] = useState("");
   const [newGoalHours, setNewGoalHours] = useState("");
   const [editingGoalId, setEditingGoalId] = useState(null);
   const [editingGoalDraft, setEditingGoalDraft] = useState({ name: "", weeklyHours: "" });
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [editingTaskDraft, setEditingTaskDraft] = useState({ title: "", due: "", notes: "" });
+  const [editingTaskDraft, setEditingTaskDraft] = useState({ title: "", due: "", dueTime: "", notes: "" });
   const [showCompleted, setShowCompleted] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
+  const taskMatchesQuery = useCallback(
+    (t) => {
+      const q = taskQuery.trim().toLowerCase();
+      if (!q) return true;
+      const hay = `${t.title || ""} ${t.notes || ""}`.toLowerCase();
+      return hay.includes(q);
+    },
+    [taskQuery]
+  );
+
+  const filteredActiveTasks = useMemo(
+    () => state.tasks.filter((t) => !t.completed && taskMatchesQuery(t)).slice(0, 60),
+    [state.tasks, taskMatchesQuery]
+  );
 
   function addGoal() {
     if (!newGoalName.trim() || !newGoalHours) return;
@@ -504,9 +599,11 @@ function GoalsTasksScreen({ state }) {
 
   function startEditingTask(task) {
     setEditingTaskId(task.id);
+    const { date, time } = dueIsoToLocalDateAndTime(task.due);
     setEditingTaskDraft({
       title: task.title || "",
-      due: toDateInputValue(task.due),
+      due: date,
+      dueTime: time,
       notes: task.notes || "",
     });
   }
@@ -515,14 +612,18 @@ function GoalsTasksScreen({ state }) {
     const title = editingTaskDraft.title.trim();
     if (!title) return;
     const notes = editingTaskDraft.notes.trim();
-    const dueIso = editingTaskDraft.due ? toGoogleDueDate(editingTaskDraft.due) : null;
+    const dueIso = localDateAndTimeToDueIso(editingTaskDraft.due, editingTaskDraft.dueTime);
 
     state.setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, title, notes, due: dueIso } : t))
+      prev.map((t) =>
+        t.id === task.id
+          ? { ...t, title, notes, due: dueIso, urgency: urgencyScoreFromDueDate(dueIso) }
+          : t
+      )
     );
 
     setEditingTaskId(null);
-    setEditingTaskDraft({ title: "", due: "", notes: "" });
+    setEditingTaskDraft({ title: "", due: "", dueTime: "", notes: "" });
 
     if (task.source === "google" && task.taskListId) {
       try {
@@ -558,85 +659,79 @@ function GoalsTasksScreen({ state }) {
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
-      <TopBar title="Goals & Tasks" onPressProfile={() => setProfileOpen(true)} />
+      <TopBar onPressProfile={() => setProfileOpen(true)} profilePhotoUri={state.googleProfilePhotoUrl} taskSearch={taskQuery} onTaskSearchChange={setTaskQuery} />
 
-      <View style={styles.card}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.h2}>Weekly Goals</Text>
-        </View>
-        <View style={styles.row}>
-          <TextInput style={styles.input} placeholder="Goal" value={newGoalName} onChangeText={setNewGoalName} />
-          <View style={styles.spacer8} />
-          <TextInput style={[styles.input, styles.hoursInput]} placeholder="hrs" keyboardType="numeric" value={newGoalHours} onChangeText={setNewGoalHours} />
-          <View style={styles.spacer8} />
-          <Pressable onPress={addGoal} accessibilityRole="button" accessibilityLabel="Add goal" hitSlop={8} style={styles.iconAddGoalBtn}>
-            <Ionicons name="add" size={22} color="#fff" />
-          </Pressable>
-        </View>
-        <FlatList
-          data={state.goals}
-          keyExtractor={(g) => g.id}
-          renderItem={({ item }) => (
-            <Swipeable
-              renderRightActions={() =>
-                renderSwipeActionIcon("create-outline", () => startEditingGoal(item))
-              }
-            >
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
+        <View style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.h2}>Weekly Goals</Text>
+          </View>
+          <View style={styles.row}>
+            <TextInput style={styles.input} placeholder="Goal" value={newGoalName} onChangeText={setNewGoalName} />
+            <View style={styles.spacer8} />
+            <TextInput style={[styles.input, styles.hoursInput]} placeholder="hrs" keyboardType="numeric" value={newGoalHours} onChangeText={setNewGoalHours} />
+            <View style={styles.spacer8} />
+            <Pressable onPress={addGoal} accessibilityRole="button" accessibilityLabel="Add goal" hitSlop={8} style={styles.iconAddGoalBtn}>
+              <Ionicons name="add" size={22} color="#fff" />
+            </Pressable>
+          </View>
+          {state.goals.map((item) => (
+            <Swipeable key={item.id} renderRightActions={() => renderSwipeActionIcon("create-outline", () => startEditingGoal(item))}>
               <View style={styles.listRow}>
                 <Text style={styles.listTitle}>{item.name}</Text>
-                <Text style={styles.badge}>{item.weeklyHours}h</Text>
+                <Text style={[styles.badge, styles.goalHoursBadge]}>{item.weeklyHours}h</Text>
               </View>
             </Swipeable>
-          )}
-        />
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.h2}>To‑Do</Text>
-          <Pressable style={styles.ghostPill} onPress={() => setShowCompleted((p) => !p)}>
-            <Text style={styles.ghostPillText}>{showCompleted ? "Hide done" : "Show done"}</Text>
-          </Pressable>
+          ))}
         </View>
-        <FlatList
-          data={state.tasks.filter((t) => !t.completed).slice(0, 30)}
-          keyExtractor={(t) => t.id}
-          renderItem={({ item }) => (
-            <Swipeable
-              renderRightActions={() => (
-                <View style={styles.swipeActionsRow}>
-                  {renderSwipeActionIcon("create-outline", () => startEditingTask(item))}
-                  {renderSwipeActionIcon(item.completed ? "arrow-undo-outline" : "checkmark-outline", () => toggleTaskCompleted(item.id))}
-                </View>
-              )}
-            >
-              <View style={styles.listRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.listTitle}>{item.title}</Text>
-                  <Text style={styles.subtle}>
-                    Due: {safeDateLabel(item.due)} · {item.source}
-                  </Text>
-                </View>
-              </View>
-            </Swipeable>
-          )}
-          ListEmptyComponent={<Text style={styles.subtle}>No tasks</Text>}
-        />
 
-        {showCompleted && (
-          <View style={styles.donePanel}>
-            <Text style={styles.label}>Completed</Text>
-            {(state.tasks.filter((t) => t.completed) || []).slice(0, 50).map((t) => (
-              <Text key={t.id} style={styles.doneItemText} numberOfLines={1}>
-                {t.title}
-              </Text>
-            ))}
-            {state.tasks.filter((t) => t.completed).length === 0 && (
-              <Text style={styles.subtle}>No completed tasks yet.</Text>
-            )}
+        <View style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.h2}>To‑Do</Text>
+            <Pressable style={styles.ghostPill} onPress={() => setShowCompleted((p) => !p)}>
+              <Text style={styles.ghostPillText}>{showCompleted ? "Hide done" : "Show done"}</Text>
+            </Pressable>
           </View>
-        )}
-      </View>
+          {filteredActiveTasks.length === 0 ? (
+            <Text style={styles.subtle}>{taskQuery.trim() ? "No tasks match your search." : "No tasks"}</Text>
+          ) : (
+            filteredActiveTasks.map((item) => (
+              <Swipeable
+                key={item.id}
+                renderRightActions={() => (
+                  <View style={styles.swipeActionsRow}>
+                    {renderSwipeActionIcon("create-outline", () => startEditingTask(item))}
+                    {renderSwipeActionIcon(item.completed ? "arrow-undo-outline" : "checkmark-outline", () => toggleTaskCompleted(item.id))}
+                  </View>
+                )}
+              >
+                <View style={styles.listRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.listTitle}>{item.title}</Text>
+                    <Text style={styles.subtle}>
+                      {formatTaskDueForDisplay(item.due, { fallback: "No date" })} · {item.source}
+                    </Text>
+                  </View>
+                </View>
+              </Swipeable>
+            ))
+          )}
+
+          {showCompleted && (
+            <View style={styles.donePanel}>
+              <Text style={styles.label}>Completed</Text>
+              {(state.tasks.filter((t) => t.completed && taskMatchesQuery(t)) || []).slice(0, 50).map((t) => (
+                <Text key={t.id} style={styles.doneItemText} numberOfLines={1}>
+                  {t.title}
+                </Text>
+              ))}
+              {state.tasks.filter((t) => t.completed).length === 0 && (
+                <Text style={styles.subtle}>No completed tasks yet.</Text>
+              )}
+            </View>
+          )}
+        </View>
+      </ScrollView>
 
       {/* Goal edit modal */}
       <Modal visible={Boolean(editingGoalId)} transparent animationType="fade" onRequestClose={() => setEditingGoalId(null)}>
@@ -662,7 +757,11 @@ function GoalsTasksScreen({ state }) {
             <Text style={styles.modalTitle}>Edit task</Text>
             <TextInput style={styles.input} value={editingTaskDraft.title} onChangeText={(t) => setEditingTaskDraft((p) => ({ ...p, title: t }))} />
             <View style={styles.spacer8} />
+            <Text style={styles.label}>Date (YYYY-MM-DD)</Text>
             <TextInput style={styles.input} placeholder="YYYY-MM-DD" value={editingTaskDraft.due} onChangeText={(t) => setEditingTaskDraft((p) => ({ ...p, due: t }))} />
+            <View style={styles.spacer8} />
+            <Text style={styles.label}>Time (24h, HH:mm)</Text>
+            <TextInput style={styles.input} placeholder="HH:mm" value={editingTaskDraft.dueTime} onChangeText={(t) => setEditingTaskDraft((p) => ({ ...p, dueTime: t }))} />
             <View style={styles.spacer8} />
             <TextInput style={styles.input} value={editingTaskDraft.notes} onChangeText={(t) => setEditingTaskDraft((p) => ({ ...p, notes: t }))} />
             <View style={styles.modalActions}>
@@ -687,11 +786,32 @@ function GoalsTasksScreen({ state }) {
 
 function MatrixScreen({ state }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const [taskQuery, setTaskQuery] = useState("");
   const groqKey = process.env.EXPO_PUBLIC_GROQ_KEY || "";
-  const [suggestionText, setSuggestionText] = useState("Generate suggestions to get coaching insights based on your matrix.");
+  const [suggestionText, setSuggestionText] = useState(() => buildMatrixInsightFallback(state.goals, state.scoredTasks));
   const [matrixStatus, setMatrixStatus] = useState("");
   const [isScoring, setIsScoring] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
+  const goalsRefreshKey = useMemo(() => JSON.stringify(state.goals.map((g) => ({ id: g.id, name: g.name, h: g.weeklyHours }))), [state.goals]);
+  const goalsEffectPrimed = useRef(false);
+
+  useEffect(() => {
+    if (!goalsEffectPrimed.current) {
+      goalsEffectPrimed.current = true;
+      return;
+    }
+    setSuggestionText(buildMatrixInsightFallback(state.goals, state.scoredTasks));
+    setMatrixStatus("Prioritization insight updated for your latest goals.");
+  }, [goalsRefreshKey, state.scoredTasks]);
+
+  const taskMatchesQuery = useCallback(
+    (t) => {
+      const q = taskQuery.trim().toLowerCase();
+      if (!q) return true;
+      return `${t.title || ""} ${t.notes || ""}`.toLowerCase().includes(q);
+    },
+    [taskQuery]
+  );
 
   const groups = useMemo(() => {
     const acc = {
@@ -700,9 +820,12 @@ function MatrixScreen({ state }) {
       importantNotUrgent: [],
       notImportantNotUrgent: [],
     };
-    state.scoredTasks.forEach((t) => acc[t.quadrant].push(t));
+    state.scoredTasks.forEach((t) => {
+      if (!taskMatchesQuery(t)) return;
+      acc[t.quadrant].push(t);
+    });
     return acc;
-  }, [state.scoredTasks]);
+  }, [state.scoredTasks, taskMatchesQuery]);
 
   const cells = [
     { key: "importantUrgent", title: "Important + Urgent" },
@@ -710,33 +833,6 @@ function MatrixScreen({ state }) {
     { key: "notImportantUrgent", title: "Not Important + Urgent" },
     { key: "notImportantNotUrgent", title: "Not Important + Not Urgent" },
   ];
-
-  const quadrantCounts = useMemo(() => {
-    return state.scoredTasks.reduce(
-      (acc, t) => {
-        acc[t.quadrant] += 1;
-        return acc;
-      },
-      { importantUrgent: 0, notImportantUrgent: 0, importantNotUrgent: 0, notImportantNotUrgent: 0 }
-    );
-  }, [state.scoredTasks]);
-
-  function buildLocalMatrixSuggestion() {
-    const totalGoalHours = state.goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
-    const highPriority = state.scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
-    const lowLow = quadrantCounts.notImportantNotUrgent;
-
-    if (totalGoalHours > 50) {
-      return `You allotted ${totalGoalHours} hours across goals this week, which may be unrealistic. Consider trimming or deferring lower priority work.`;
-    }
-    if (lowLow > highPriority) {
-      return "You have more tasks in the Not Important / Not Urgent quadrant than in your top priority quadrant. Consider deleting, delegating, or scheduling less.";
-    }
-    if (highPriority === 0) {
-      return "Nothing is currently both Important and Urgent. Double-check deadlines and goal alignment so your week has clear top priorities.";
-    }
-    return "Nice distribution — keep protecting time for Important / Not Urgent work so urgent work doesn’t crowd out strategy.";
-  }
 
   async function scoreImportanceWithGroq() {
     if (!state.tasks.length) {
@@ -775,7 +871,7 @@ Rules: Score importance 1-4 by goal alignment. Include every task id.
   }
 
   async function generateMatrixSuggestions() {
-    const fallback = buildLocalMatrixSuggestion();
+    const fallback = buildMatrixInsightFallback(state.goals, state.scoredTasks);
     const scoredTasks = state.scoredTasks.map((t) => ({
       title: t.title,
       due: t.due,
@@ -811,7 +907,7 @@ Tasks with urgency/importance/quadrant: ${JSON.stringify(scoredTasks)}
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
-      <TopBar title="Matrix" onPressProfile={() => setProfileOpen(true)} />
+      <TopBar onPressProfile={() => setProfileOpen(true)} profilePhotoUri={state.googleProfilePhotoUrl} taskSearch={taskQuery} onTaskSearchChange={setTaskQuery} />
       <FlatList
         data={cells}
         keyExtractor={(c) => c.key}
@@ -826,7 +922,7 @@ Tasks with urgency/importance/quadrant: ${JSON.stringify(scoredTasks)}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.listTitle} numberOfLines={1}>{t.title}</Text>
                     <Text style={styles.subtle}>
-                      Due: {safeDateLabel(t.due)}
+                      {formatTaskDueForDisplay(t.due, { fallback: "No date" })}
                     </Text>
                   </View>
                 </View>
@@ -928,7 +1024,7 @@ function CalendarScreen({ state }) {
 
   function handleSlotPress(dayIndex, locationY) {
     const minute = Math.round(((locationY / HOUR_PX) * 60 + CAL_START_HOUR * 60) / 15) * 15;
-    const clamped = Math.max(CAL_START_HOUR * 60, Math.min((CAL_END_HOUR - 1) * 60, minute));
+    const clamped = Math.max(CAL_START_HOUR * 60, Math.min(CAL_END_HOUR * 60 - 1, minute));
     state.setAddEventSlot({ day: dayIndex, startMinute: clamped });
   }
 
@@ -1139,6 +1235,17 @@ ${JSON.stringify(prioritized)}
     return a;
   }, []);
   const totalPx = hours.length * HOUR_PX;
+  const calGridScrollRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (calendarMode === "month") return;
+    const y = Math.min(CAL_INITIAL_SCROLL_HOUR * HOUR_PX, Math.max(0, totalPx - 120));
+    const id = requestAnimationFrame(() => {
+      calGridScrollRef.current?.scrollTo({ y, animated: false });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [calendarMode, weekKey, selectedDayIndex, totalPx]);
+
   const displayedDayIndices = useMemo(() => {
     if (calendarMode === "day") return [selectedDayIndex];
     return Array.from({ length: 7 }, (_, i) => i);
@@ -1185,11 +1292,17 @@ ${JSON.stringify(prioritized)}
 
   return (
     <SafeAreaView style={[styles.screen, styles.calendarScreen]} edges={["top", "left", "right"]}>
-      <TopBar title="Calendar" onPressProfile={() => setProfileOpen(true)} />
+      <TopBar title="Calendar" onPressProfile={() => setProfileOpen(true)} profilePhotoUri={state.googleProfilePhotoUrl} />
 
       {!isFocused ? (
         <View style={styles.calendarTabPlaceholder} />
       ) : (
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 28 }}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
       <>
       <View style={styles.card}>
         <View style={styles.calendarCardHeader}>
@@ -1343,14 +1456,18 @@ ${JSON.stringify(prioritized)}
         </View>
 
         <ScrollView
+          ref={calGridScrollRef}
           style={styles.calScroll}
+          nestedScrollEnabled
           removeClippedSubviews={false}
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
         >
           <View style={[styles.calBody, { height: totalPx }]}>
             <View style={styles.calTimeGutter}>
               {hours.map((h) => (
                 <Text key={h} style={[styles.calHourLabel, { top: (h - CAL_START_HOUR) * HOUR_PX }]}>
-                  {h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`}
+                  {h === 0 ? "12 AM" : h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`}
                 </Text>
               ))}
             </View>
@@ -1428,6 +1545,7 @@ ${JSON.stringify(prioritized)}
       </>
       )}
       </>
+      </ScrollView>
       )}
 
       {state.addEventSlot && (
@@ -1616,6 +1734,7 @@ function AddEventModal({ slot, weekStart, onConfirm, onCancel }) {
 
 export default function App() {
   const state = useSynapseState();
+  useRefreshSchedulingOnGoalsChange(state.goals, state.setCalSuggestions, state.setCalSugStatus);
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: stylesVars.bg }}>
@@ -1753,11 +1872,38 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.1,
   },
+  topBarSearchWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: stylesVars.card2,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginRight: 8,
+  },
+  topBarSearchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: stylesVars.fg,
+    paddingVertical: 0,
+  },
   topBarIconBtn: {
     width: 36,
     height: 36,
     alignItems: "center",
     justifyContent: "center",
+  },
+  topBarAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: stylesVars.card2,
+  },
+  goalHoursBadge: {
+    marginLeft: 10,
   },
   row: {
     flexDirection: "row",
@@ -2075,9 +2221,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   calTimeGutter: {
-    width: 76,
+    width: 52,
     position: "relative",
-    marginRight: 22,
+    marginRight: 8,
   },
   calDayHeader: {
     flex: 1,
