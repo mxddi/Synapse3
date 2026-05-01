@@ -720,14 +720,30 @@ function GoalsTasksScreen({ state }) {
           {showCompleted && (
             <View style={styles.donePanel}>
               <Text style={styles.label}>Completed</Text>
-              {(state.tasks.filter((t) => t.completed && taskMatchesQuery(t)) || []).slice(0, 50).map((t) => (
-                <Text key={t.id} style={styles.doneItemText} numberOfLines={1}>
-                  {t.title}
-                </Text>
-              ))}
-              {state.tasks.filter((t) => t.completed).length === 0 && (
+              {state.tasks.filter((t) => t.completed).length === 0 ? (
                 <Text style={styles.subtle}>No completed tasks yet.</Text>
+              ) : (
+                (state.tasks.filter((t) => t.completed && taskMatchesQuery(t)) || []).slice(0, 50).map((t) => (
+                  <Swipeable
+                    key={t.id}
+                    renderRightActions={() => (
+                      <View style={styles.swipeActionsRow}>
+                        {renderSwipeActionIcon("arrow-undo-outline", () => toggleTaskCompleted(t.id))}
+                      </View>
+                    )}
+                  >
+                    <View style={styles.listRow}>
+                      <Text style={styles.doneTaskTitle} numberOfLines={2}>
+                        {t.title}
+                      </Text>
+                    </View>
+                  </Swipeable>
+                ))
               )}
+              {state.tasks.some((t) => t.completed) &&
+                state.tasks.filter((t) => t.completed && taskMatchesQuery(t)).length === 0 && (
+                  <Text style={styles.subtle}>No completed tasks match your search.</Text>
+                )}
             </View>
           )}
         </View>
@@ -2266,6 +2282,13 @@ const styles = StyleSheet.create({
   doneItemText: {
     color: stylesVars.fgMuted,
     paddingVertical: 4,
+  },
+  doneTaskTitle: {
+    flex: 1,
+    color: stylesVars.fgMuted,
+    fontWeight: "700",
+    letterSpacing: 0.1,
+    textDecorationLine: "line-through",
   },
   matrixTaskRow: {
     flexDirection: "row",
