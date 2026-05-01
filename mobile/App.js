@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { Platform } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import { NavigationContainer, useFocusEffect } from "@react-navigation/native";
+import { NavigationContainer, useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { GestureHandlerRootView, Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
@@ -853,6 +853,7 @@ Tasks with urgency/importance/quadrant: ${JSON.stringify(scoredTasks)}
 }
 
 function CalendarScreen({ state }) {
+  const isFocused = useIsFocused();
   const weekKey = weekKeyFromDate(state.currentWeekStart);
   const groqKey = process.env.EXPO_PUBLIC_GROQ_KEY || "";
   const [profileOpen, setProfileOpen] = useState(false);
@@ -1183,9 +1184,13 @@ ${JSON.stringify(prioritized)}
   }, [monthAnchor]);
 
   return (
-    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+    <SafeAreaView style={[styles.screen, styles.calendarScreen]} edges={["top", "left", "right"]}>
       <TopBar title="Calendar" onPressProfile={() => setProfileOpen(true)} />
 
+      {!isFocused ? (
+        <View style={styles.calendarTabPlaceholder} />
+      ) : (
+      <>
       <View style={styles.card}>
         <View style={styles.calendarCardHeader}>
           <Text style={styles.h2}>
@@ -1337,7 +1342,10 @@ ${JSON.stringify(prioritized)}
           ))}
         </View>
 
-        <ScrollView style={{ maxHeight: 420 }}>
+        <ScrollView
+          style={styles.calScroll}
+          removeClippedSubviews={false}
+        >
           <View style={[styles.calBody, { height: totalPx }]}>
             <View style={styles.calTimeGutter}>
               {hours.map((h) => (
@@ -1417,6 +1425,8 @@ ${JSON.stringify(prioritized)}
           </View>
         )}
       </View>
+      </>
+      )}
       </>
       )}
 
@@ -1669,6 +1679,17 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 16,
     paddingHorizontal: 20,
+  },
+  calendarScreen: {
+    overflow: "hidden",
+  },
+  calendarTabPlaceholder: {
+    flex: 1,
+    backgroundColor: stylesVars.bg,
+  },
+  calScroll: {
+    maxHeight: 420,
+    overflow: "hidden",
   },
   h1: {
     fontSize: 32,
