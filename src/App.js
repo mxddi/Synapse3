@@ -14,7 +14,7 @@ const HOUR_PX = 64;  // px per hour in the grid
 const EVENT_COLORS = {
   google: { bg: "#4285F4", text: "#fff" },
   manual: { bg: "#34A853", text: "#fff" },
-  suggested: { bg: "#FBBC05", text: "#1a1a1a" },
+  suggested: { bg: "#EA6C00", text: "#fff" },
 };
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
