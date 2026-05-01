@@ -666,13 +666,13 @@ function GoalsTasksScreen({ state }) {
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.h2}>Weekly Goals</Text>
           </View>
-          <View style={styles.row}>
+          <View style={[styles.row, styles.goalsAddRow]}>
             <TextInput style={styles.input} placeholder="Goal" value={newGoalName} onChangeText={setNewGoalName} />
             <View style={styles.spacer8} />
             <TextInput style={[styles.input, styles.hoursInput]} placeholder="hrs" keyboardType="numeric" value={newGoalHours} onChangeText={setNewGoalHours} />
             <View style={styles.spacer8} />
-            <Pressable onPress={addGoal} accessibilityRole="button" accessibilityLabel="Add goal" hitSlop={8} style={styles.iconAddGoalBtn}>
-              <Ionicons name="add" size={22} color="#fff" />
+            <Pressable onPress={addGoal} accessibilityRole="button" accessibilityLabel="Add goal" hitSlop={6} style={styles.iconAddGoalBtn}>
+              <Ionicons name="add" size={18} color="#fff" />
             </Pressable>
           </View>
           {state.goals.map((item) => (
@@ -1338,9 +1338,10 @@ ${JSON.stringify(prioritized)}
         </View>
         <Text style={styles.subtle}>{label}</Text>
         <View style={styles.spacer12} />
-        <View style={styles.row}>
-          <OutlineButton
-            title="Prev"
+        <View style={[styles.row, styles.calNavRow]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Previous"
             onPress={() => {
               if (calendarMode === "month") {
                 setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
@@ -1357,12 +1358,17 @@ ${JSON.stringify(prioritized)}
               }
               state.setCurrentWeekStart((w) => addDays(w, -7));
             }}
-          />
+            style={styles.calChevronBtn}
+            hitSlop={8}
+          >
+            <Ionicons name="chevron-back" size={26} color={stylesVars.fg} />
+          </Pressable>
           <View style={styles.spacer8} />
           <OutlineButton title="Today" onPress={() => alignWeekTo(new Date())} />
           <View style={styles.spacer8} />
-          <OutlineButton
-            title="Next"
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Next"
             onPress={() => {
               if (calendarMode === "month") {
                 setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
@@ -1379,13 +1385,34 @@ ${JSON.stringify(prioritized)}
               }
               state.setCurrentWeekStart((w) => addDays(w, 7));
             }}
-          />
+            style={styles.calChevronBtn}
+            hitSlop={8}
+          >
+            <Ionicons name="chevron-forward" size={26} color={stylesVars.fg} />
+          </Pressable>
         </View>
         <View style={styles.spacer12} />
-        <View style={styles.row}>
-          <OutlineButton title={state.isSyncingCal ? "Syncing..." : "Sync Google Calendar"} onPress={syncCalendar} disabled={state.isSyncingCal} />
-          <View style={styles.spacer8} />
-          <OutlineButton title={state.isGenCalSug ? "Analyzing..." : "Suggest Schedule"} onPress={generateCalendarSuggestions} disabled={state.isGenCalSug} />
+        <View style={[styles.row, styles.calToolbarRow]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={state.isSyncingCal ? "Syncing calendar" : "Sync Google Calendar"}
+            onPress={syncCalendar}
+            disabled={state.isSyncingCal}
+            style={[styles.calToolbarIconBtn, state.isSyncingCal ? styles.calToolbarIconBtnDisabled : null]}
+            hitSlop={6}
+          >
+            <Ionicons name="cloud-download-outline" size={22} color={stylesVars.fg} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={state.isGenCalSug ? "Generating suggestions" : "Suggest schedule"}
+            onPress={generateCalendarSuggestions}
+            disabled={state.isGenCalSug}
+            style={[styles.calToolbarIconBtn, state.isGenCalSug ? styles.calToolbarIconBtnDisabled : null]}
+            hitSlop={6}
+          >
+            <Ionicons name="color-wand-outline" size={22} color={stylesVars.fg} />
+          </Pressable>
         </View>
         <View style={styles.spacer8} />
         <Text style={styles.status}>{state.calendarStatus}</Text>
@@ -1948,13 +1975,50 @@ const styles = StyleSheet.create({
   pillTextOn: {
     color: "#fff",
   },
+  goalsAddRow: {
+    alignItems: "center",
+    paddingBottom: 2,
+    marginBottom: 2,
+  },
   iconAddGoalBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: "#111",
     alignItems: "center",
     justifyContent: "center",
+  },
+  calNavRow: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calChevronBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: stylesVars.card2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calToolbarRow: {
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 4,
+  },
+  calToolbarIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: stylesVars.border,
+    backgroundColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calToolbarIconBtnDisabled: {
+    opacity: 0.45,
   },
   timeField: {
     flexDirection: "row",

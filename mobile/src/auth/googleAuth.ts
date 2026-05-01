@@ -31,7 +31,22 @@ function googleClientSecretFromEnv(): string | undefined {
 
 function throwGoogleOAuthHelp(err: unknown, redirectUri: string): never {
   const msg = err instanceof Error ? err.message : String(err);
-  if (/client_secret is missing|Client authentication failed/i.test(msg)) {
+  const secretPresent = Boolean(googleClientSecretFromEnv());
+
+  // Wrong secret, wrong client ID, or Desktop client with a leftover web secret — Google still says "Client authentication failed".
+  if (
+    /client secret is invalid|invalid.*client secret|invalid_client/i.test(msg) ||
+    (secretPresent && /Client authentication failed/i.test(msg))
+  ) {
+    throw new Error(
+      `${msg}\n\n` +
+        "**What this usually means:** Google rejected `client_id` + `client_secret` together. The secret must belong to the **same** OAuth 2.0 Client as `EXPO_PUBLIC_GOOGLE_CLIENT_ID` (no typos, no trailing spaces).\n\n" +
+        "**Fix (Web client):** Google Cloud Console → APIs & Services → Credentials → open **that** OAuth client → copy **Client secret** (or **Reset secret** and use the new value). Update **EXPO_PUBLIC_GOOGLE_CLIENT_SECRET** in Vercel or `.env`, then **rebuild/redeploy** so the bundle picks up the new env var.\n\n" +
+        "**If you switched to a Desktop app client:** Remove **EXPO_PUBLIC_GOOGLE_CLIENT_SECRET** entirely (Desktop clients must not send a web client’s secret). Use only the Desktop client’s ID in **EXPO_PUBLIC_GOOGLE_CLIENT_ID**."
+    );
+  }
+
+  if (/client_secret is missing/i.test(msg) || (!secretPresent && /Client authentication failed/i.test(msg))) {
     throw new Error(
       `${msg}\n\n` +
         "You are using a **Web application** OAuth client. Google requires **client_secret** when exchanging the auth code at the token endpoint.\n\n" +
