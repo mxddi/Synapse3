@@ -55,13 +55,17 @@ const TOKEN_KEY = "synapse_google_token_v1";
 
 export const GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
 export const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
-export const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE}`;
+/** Profile image (userinfo); add this scope in Google Cloud Console for the OAuth client. */
+export const GOOGLE_PROFILE_SCOPE = "https://www.googleapis.com/auth/userinfo.profile";
+export const GOOGLE_COMBINED_SCOPE = `${GOOGLE_TASKS_SCOPE} ${GOOGLE_CALENDAR_SCOPE} ${GOOGLE_PROFILE_SCOPE}`;
 
 type StoredToken = {
   accessToken: string;
   expiresAtMs: number;
   refreshToken?: string | null;
   scope?: string;
+  /** Profile photo URL from `oauth2/v2/userinfo` when `userinfo.profile` scope is granted. */
+  picture?: string | null;
 };
 
 function nowMs() {
@@ -108,6 +112,27 @@ async function saveStoredToken(token: StoredToken) {
   }
 }
 
+async function fetchGoogleUserInfoPicture(accessToken: string): Promise<string | null> {
+  const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { picture?: string };
+  return typeof data.picture === "string" && data.picture.length > 0 ? data.picture : null;
+}
+
+/** Fetches profile photo and merges into stored credentials (no-op if request fails). */
+async function mergeProfilePictureIntoStored(accessToken: string) {
+  try {
+    const picture = await fetchGoogleUserInfoPicture(accessToken);
+    const existing = await loadStoredToken();
+    if (!existing) return;
+    await saveStoredToken({ ...existing, picture: picture ?? existing.picture ?? null });
+  } catch {
+    // ignore — Tasks/Calendar still work without a profile image
+  }
+}
+
 export async function disconnectGoogle() {
   try {
     await SecureStore.deleteItemAsync(TOKEN_KEY);
@@ -136,7 +161,12 @@ export async function getGoogleAccessToken({
   const clientSecret = googleClientSecretFromEnv();
   const redirectUri = getGoogleOAuthRedirectUri();
   const existing = forceReauth ? null : await loadStoredToken();
-  if (existing?.accessToken && isAccessTokenValid(existing)) return existing.accessToken;
+  if (existing?.accessToken && isAccessTokenValid(existing)) {
+    if (!existing.picture) {
+      await mergeProfilePictureIntoStored(existing.accessToken);
+    }
+    return existing.accessToken;
+  }
 
   // If we have a refresh token, refresh without opening a browser.
   if (!forceReauth && existing?.refreshToken) {
@@ -167,8 +197,10 @@ export async function getGoogleAccessToken({
         expiresAtMs,
         refreshToken: refreshed.refreshToken || existing.refreshToken,
         scope: scopes,
+        picture: existing.picture,
       };
       await saveStoredToken(next);
+      await mergeProfilePictureIntoStored(accessToken);
       return accessToken;
     } catch (err) {
       if (
@@ -245,7 +277,15 @@ export async function getGoogleAccessToken({
     null;
 
   await saveStoredToken({ accessToken, expiresAtMs, refreshToken: refreshToken || undefined, scope: scopes });
+  await mergeProfilePictureIntoStored(accessToken);
 
   return accessToken;
+}
+
+/** Profile photo URL from the last successful Google sign-in (reads secure storage only). */
+export async function getGoogleProfilePhotoFromStorage(): Promise<string | null> {
+  const t = await loadStoredToken();
+  const p = t?.picture;
+  return typeof p === "string" && p.length > 0 ? p : null;
 }
 

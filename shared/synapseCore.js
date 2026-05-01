@@ -1,7 +1,7 @@
 // Shared, framework-agnostic logic used by both web and mobile.
 
-export const CAL_START_HOUR = 6; // 6 AM
-export const CAL_END_HOUR = 22; // 10 PM
+export const CAL_START_HOUR = 0; // midnight
+export const CAL_END_HOUR = 24; // end of day (exclusive hour index; grid shows 0–23, minutes through 23:59)
 
 export function urgencyScoreFromDueDate(dueDate) {
   if (!dueDate) return 1;
@@ -35,6 +35,71 @@ export function buildFallbackImportance(task, goals) {
   if (hits === 1) return 3;
   if (task.notes) return 2;
   return 1;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+/** Display Google Tasks–style due (RFC3339) as local date + time. */
+export function formatTaskDueForDisplay(isoOrNull, { fallback = "None" } = {}) {
+  if (!isoOrNull) return fallback;
+  const d = new Date(isoOrNull);
+  if (Number.isNaN(d.getTime())) return fallback;
+  try {
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return String(isoOrNull);
+  }
+}
+
+/** Split a due ISO into local YYYY-MM-DD and HH:mm for editors. */
+export function dueIsoToLocalDateAndTime(isoOrNull) {
+  if (!isoOrNull) return { date: "", time: "09:00" };
+  const d = new Date(isoOrNull);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "09:00" };
+  return {
+    date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+    time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+  };
+}
+
+/** Build RFC3339 due for Google Tasks from local date + time fields. */
+export function localDateAndTimeToDueIso(dateStr, timeStr) {
+  if (!dateStr || !String(dateStr).trim()) return null;
+  const tm = String(timeStr || "09:00").trim().match(/^(\d{1,2}):(\d{2})$/);
+  const hh = tm ? Math.max(0, Math.min(23, parseInt(tm[1], 10))) : 9;
+  const mm = tm ? Math.max(0, Math.min(59, parseInt(tm[2], 10))) : 0;
+  const dm = String(dateStr).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dm) return null;
+  const d = new Date(parseInt(dm[1], 10), parseInt(dm[2], 10) - 1, parseInt(dm[3], 10), hh, mm, 0, 0);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+/** Local coaching copy when matrix insight is refreshed from goal changes (no Groq). */
+export function buildMatrixInsightFallback(goals, scoredTasks) {
+  const totalGoalHours = goals.reduce((s, g) => s + Number(g.weeklyHours || 0), 0);
+  const quadrantCounts = scoredTasks.reduce(
+    (acc, t) => {
+      acc[t.quadrant] += 1;
+      return acc;
+    },
+    { importantUrgent: 0, notImportantUrgent: 0, importantNotUrgent: 0, notImportantNotUrgent: 0 }
+  );
+  const highPriority = scoredTasks.filter((t) => t.importance >= 3 && t.urgency >= 3).length;
+  const lowLow = quadrantCounts.notImportantNotUrgent;
+
+  if (totalGoalHours > 50) {
+    return `You allotted ${totalGoalHours} hours across goals this week, which may be unrealistic. Consider trimming or deferring lower priority work.`;
+  }
+  if (lowLow > highPriority) {
+    return "You have more tasks in the Not Important / Not Urgent quadrant than in your top priority quadrant. Consider deleting, delegating, or scheduling less.";
+  }
+  if (highPriority === 0) {
+    return "Nothing is currently both Important and Urgent. Double-check deadlines and goal alignment so your week has clear top priorities.";
+  }
+  return "Nice distribution — keep protecting time for Important / Not Urgent work so urgent work doesn’t crowd out strategy.";
 }
 
 export function getWeekStart(date) {
@@ -88,7 +153,7 @@ export function normalizeAndLimitSuggestions(rawSuggestions, busyByDay, taskTitl
     })
     .filter((s) => Number.isInteger(s.day) && s.day >= 0 && s.day <= 6)
     .filter((s) => Number.isFinite(s.startMinute) && Number.isFinite(s.endMinute))
-    .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60)
+    .filter((s) => s.startMinute >= CAL_START_HOUR * 60 && s.endMinute <= CAL_END_HOUR * 60 - 1)
     .filter((s) => s.startMinute < s.endMinute)
     .filter((s) => {
       const blocks = busyByDay[s.day] || [];

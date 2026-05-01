@@ -15,6 +15,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { formatTaskDueForDisplay } from "../../../shared/synapseCore";
+
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 const PLAN_STORAGE_KEY = "synapse_goal_plan_v1";
 
@@ -197,11 +199,142 @@ export function GoalPlanScreen({ state }) {
   const [chatMessages, setChatMessages] = useState([
     {
       role: "assistant",
-      content: "What long-term goals are you aiming for (with years)? I’ll help break them into milestones and weekly focus areas.",
+      content:
+        "What long-term goals are you aiming for (with years)? I’ll suggest milestones and weekly focus — use + to accept, − to discard, or edit before accepting.",
     },
   ]);
+  /** Coach-proposed goals awaiting user confirmation: longTerm | intermediate | shortTerm */
+  const [pendingSuggestions, setPendingSuggestions] = useState([]);
+  const [editPending, setEditPending] = useState(null);
 
   const seed = useMemo(() => hashString("synapse-bubbles-v1"), []);
+
+  function discardPending(id) {
+    setPendingSuggestions((prev) => prev.filter((p) => p.id !== id));
+    setEditPending((e) => (e && e.id === id ? null : e));
+  }
+
+  function openEditPending(p) {
+    setEditPending({
+      id: p.id,
+      kind: p.kind,
+      title: p.title,
+      year: String(p.year),
+      weeklyHoursTarget: p.weeklyHoursTarget != null ? String(p.weeklyHoursTarget) : "5",
+    });
+  }
+
+  function saveEditPending() {
+    if (!editPending) return;
+    const title = String(editPending.title || "").trim();
+    const year = safeYear(editPending.year);
+    const weeklyHoursTarget = Math.max(1, Math.min(80, Number(editPending.weeklyHoursTarget) || 5));
+    if (!title) return;
+    setPendingSuggestions((prev) =>
+      prev.map((p) =>
+        p.id === editPending.id
+          ? {
+              ...p,
+              title,
+              year,
+              ...(p.kind === "shortTerm" ? { weeklyHoursTarget } : {}),
+            }
+          : p
+      )
+    );
+    setEditPending(null);
+  }
+
+  function acceptPending(p) {
+    const title = String(p.title || "").trim();
+    const year = safeYear(p.year);
+    if (!title) return;
+
+    if (p.kind === "longTerm") {
+      setLtGoals((prev) => {
+        if (prev.some((g) => g.title.toLowerCase() === title.toLowerCase() && g.year === year)) return prev;
+        return [
+          ...prev,
+          {
+            id: `lt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            title,
+            year,
+            color: colorForGoal(`${title}:${year}`),
+            mids: [],
+          },
+        ];
+      });
+      state.setGoals((g) => [...g, { id: `g-${Date.now()}`, name: title, weeklyHours: 5 }]);
+    }
+
+    if (p.kind === "intermediate") {
+      setLtGoals((prev) => {
+        let next = [...prev];
+        let idx = next.findIndex((g) => g.year === year);
+        if (idx < 0) {
+          next.push({
+            id: `lt-${Date.now()}-auto`,
+            title: `${year} priorities`,
+            year,
+            color: colorForGoal(`${year}-auto`),
+            mids: [],
+          });
+          idx = next.length - 1;
+        }
+        const g = next[idx];
+        const mids = [...(g.mids || [])];
+        const j = mids.length;
+        mids.push({
+          id: `mid-${g.id}-${hashString(title)}-${j}`,
+          title,
+          shorts: [
+            { id: `st-${hashString(title)}-${j}a`, title: `First step: ${title}` },
+            { id: `st-${hashString(title)}-${j}b`, title: `Next step: refine plan for ${title}` },
+          ],
+        });
+        next[idx] = { ...g, mids: mids.slice(0, 10) };
+        return next;
+      });
+    }
+
+    if (p.kind === "shortTerm") {
+      const hrs = Math.max(1, Math.min(80, Number(p.weeklyHoursTarget) || 5));
+      setLtGoals((prev) => {
+        let next = [...prev];
+        let idx = next.findIndex((g) => g.year === year);
+        if (idx < 0) {
+          next.push({
+            id: `lt-${Date.now()}-auto`,
+            title: `${year} priorities`,
+            year,
+            color: colorForGoal(`${year}-wk`),
+            mids: [],
+          });
+          idx = next.length - 1;
+        }
+        const g = next[idx];
+        const mids = [...(g.mids || [])];
+        const j = mids.length;
+        mids.push({
+          id: `mid-${g.id}-${hashString(title)}-${j}`,
+          title,
+          weeklyHoursTarget: hrs,
+          shorts: [{ id: `st-${hashString(title)}-${j}`, title: `Weekly rhythm: ${title}` }],
+        });
+        next[idx] = { ...g, mids: mids.slice(0, 10) };
+        return next;
+      });
+      state.setGoals((g) => [...g, { id: `g-${Date.now()}`, name: title, weeklyHours: hrs }]);
+    }
+
+    discardPending(p.id);
+  }
+
+  function pendingKindLabel(kind) {
+    if (kind === "longTerm") return "Long term";
+    if (kind === "intermediate") return "Intermediate";
+    return "Short term";
+  }
 
   useEffect(() => {
     (async () => {
@@ -247,6 +380,8 @@ Return ONLY strict JSON:
   "weekly":[{"title":"string","year":2026,"weeklyHoursTarget": number}]
 }
 
+The user must confirm each suggested goal before it is saved. Put candidates in longTerm / monthly / weekly; do not invent duplicates of titles they already have for the same year.
+
 User message:
 ${msg}
 
@@ -256,57 +391,41 @@ ${JSON.stringify(ltGoals.map((g) => ({ title: g.title, year: g.year })))}
       const parsed = await fetchGroqJson(prompt, groqKey);
       const reply = String(parsed.reply || "Sounds good.");
 
-      setLtGoals((prev) => {
-        let next = [...prev];
-        for (const lt of Array.isArray(parsed.longTerm) ? parsed.longTerm : []) {
-          const title = String(lt.title || "").trim();
-          const year = safeYear(lt.year);
-          if (!title) continue;
-          if (next.some((g) => g.title.toLowerCase() === title.toLowerCase() && g.year === year)) continue;
-          next.push({
-            id: `lt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            title,
-            year,
-            color: colorForGoal(`${title}:${year}`),
-            mids: [],
-          });
-        }
+      const nextPending = [];
+      let c = 0;
+      const stamp = () => `pend-${Date.now()}-${(c += 1)}`;
 
-        const monthly = Array.isArray(parsed.monthly) ? parsed.monthly : [];
-        const weekly = Array.isArray(parsed.weekly) ? parsed.weekly : [];
-        next = next.map((g) => {
-          const adds = []
-            .concat(monthly.filter((x) => safeYear(x.year) === g.year).map((x) => ({ kind: "m", ...x })))
-            .concat(weekly.filter((x) => safeYear(x.year) === g.year).map((x) => ({ kind: "w", ...x })));
-          if (!adds.length) return g;
+      for (const lt of Array.isArray(parsed.longTerm) ? parsed.longTerm : []) {
+        const title = String(lt.title || "").trim();
+        const year = safeYear(lt.year);
+        if (!title) continue;
+        if (ltGoals.some((g) => g.title.toLowerCase() === title.toLowerCase() && g.year === year)) continue;
+        nextPending.push({ id: stamp(), kind: "longTerm", title, year });
+      }
 
-          const mids = [...(g.mids || [])];
-          adds.forEach((x, idx) => {
-            const title = String(x.title || "").trim();
-            if (!title) return;
-            if (x.kind === "w") {
-              mids.push({
-                id: `mid-${g.id}-${hashString(title)}-${idx}`,
-                title,
-                weeklyHoursTarget: Number(x.weeklyHoursTarget || 5),
-                shorts: [{ id: `st-${hashString(title)}-${idx}`, title: `Weekly rhythm: ${title}` }],
-              });
-            } else {
-              mids.push({
-                id: `mid-${g.id}-${hashString(title)}-${idx}`,
-                title,
-                shorts: [
-                  { id: `st-${hashString(title)}-${idx}a`, title: `First step: ${title}` },
-                  { id: `st-${hashString(title)}-${idx}b`, title: `Next step: refine plan for ${title}` },
-                ],
-              });
-            }
-          });
-          return { ...g, mids: mids.slice(0, 10) };
+      for (const x of Array.isArray(parsed.monthly) ? parsed.monthly : []) {
+        const title = String(x.title || "").trim();
+        const year = safeYear(x.year);
+        if (!title) continue;
+        nextPending.push({ id: stamp(), kind: "intermediate", title, year });
+      }
+
+      for (const x of Array.isArray(parsed.weekly) ? parsed.weekly : []) {
+        const title = String(x.title || "").trim();
+        const year = safeYear(x.year);
+        if (!title) continue;
+        nextPending.push({
+          id: stamp(),
+          kind: "shortTerm",
+          title,
+          year,
+          weeklyHoursTarget: Number(x.weeklyHoursTarget || 5),
         });
+      }
 
-        return next;
-      });
+      if (nextPending.length) {
+        setPendingSuggestions((prev) => [...prev, ...nextPending]);
+      }
 
       setChatMessages((m) => [...m, { role: "assistant", content: reply }]);
     } catch (err) {
@@ -448,7 +567,7 @@ ${JSON.stringify(ltGoals.map((g) => ({ title: g.title, year: g.year })))}
                 return tasks.map((t) => (
                   <View key={t.id} style={styles.taskRow}>
                     <Text style={styles.taskTitle}>{t.title}</Text>
-                    <Text style={styles.taskMeta}>{t.due ? `Due: ${String(t.due)}` : "No due date"}</Text>
+                    <Text style={styles.taskMeta}>{formatTaskDueForDisplay(t.due, { fallback: "No date" })}</Text>
                   </View>
                 ));
               })()}
@@ -467,7 +586,7 @@ ${JSON.stringify(ltGoals.map((g) => ({ title: g.title, year: g.year })))}
               </Pressable>
             </View>
 
-            <ScrollView style={{ marginTop: 12, marginBottom: 12, maxHeight: 420 }}>
+            <ScrollView style={{ marginTop: 12, marginBottom: 12, maxHeight: 320 }}>
               {chatMessages.map((m, i) => (
                 <View key={i} style={{ marginBottom: 10 }}>
                   <Text style={[styles.role, m.role === "user" ? styles.roleUser : styles.roleAssist]}>
@@ -477,6 +596,35 @@ ${JSON.stringify(ltGoals.map((g) => ({ title: g.title, year: g.year })))}
                 </View>
               ))}
             </ScrollView>
+
+            {pendingSuggestions.length > 0 ? (
+              <View style={styles.pendingBox}>
+                <Text style={styles.pendingHeader}>Review suggestions</Text>
+                {pendingSuggestions.map((p) => (
+                  <View key={p.id} style={styles.pendingRow}>
+                    <View style={{ flex: 1, paddingRight: 8 }}>
+                      <Text style={styles.pendingKind}>{pendingKindLabel(p.kind)}</Text>
+                      <Text style={styles.pendingTitleText}>{p.title}</Text>
+                      <Text style={styles.subtle}>
+                        Year {p.year}
+                        {p.kind === "shortTerm" && p.weeklyHoursTarget != null ? ` · ${p.weeklyHoursTarget} hrs/wk` : ""}
+                      </Text>
+                    </View>
+                    <View style={styles.pendingActions}>
+                      <Pressable onPress={() => openEditPending(p)} hitSlop={8} style={styles.pendingIconBtn} accessibilityLabel="Edit suggestion">
+                        <Ionicons name="create-outline" size={22} color={stylesVars.fg} />
+                      </Pressable>
+                      <Pressable onPress={() => acceptPending(p)} hitSlop={8} style={styles.pendingIconBtn} accessibilityLabel="Accept suggestion">
+                        <Ionicons name="add" size={26} color="#34A853" />
+                      </Pressable>
+                      <Pressable onPress={() => discardPending(p.id)} hitSlop={8} style={styles.pendingIconBtn} accessibilityLabel="Discard suggestion">
+                        <Ionicons name="remove" size={26} color="#EA4335" />
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <TextInput
@@ -490,6 +638,49 @@ ${JSON.stringify(ltGoals.map((g) => ({ title: g.title, year: g.year })))}
                 <Ionicons name="arrow-up" size={18} color="#fff" />
               </Pressable>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal transparent visible={Boolean(editPending)} animationType="fade" onRequestClose={() => setEditPending(null)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setEditPending(null)}>
+          <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Edit suggestion</Text>
+            {editPending ? (
+              <>
+                <Text style={[styles.subtle, { marginTop: 8 }]}>{pendingKindLabel(editPending.kind)}</Text>
+                <TextInput
+                  style={[styles.input, { marginTop: 10 }]}
+                  value={editPending.title}
+                  onChangeText={(t) => setEditPending((p) => (p ? { ...p, title: t } : p))}
+                  placeholder="Title"
+                />
+                <TextInput
+                  style={[styles.input, { marginTop: 8 }]}
+                  value={editPending.year}
+                  onChangeText={(t) => setEditPending((p) => (p ? { ...p, year: t } : p))}
+                  placeholder="Year"
+                  keyboardType="number-pad"
+                />
+                {editPending.kind === "shortTerm" ? (
+                  <TextInput
+                    style={[styles.input, { marginTop: 8 }]}
+                    value={editPending.weeklyHoursTarget}
+                    onChangeText={(t) => setEditPending((p) => (p ? { ...p, weeklyHoursTarget: t } : p))}
+                    placeholder="Hours per week"
+                    keyboardType="numeric"
+                  />
+                ) : null}
+                <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+                  <Pressable onPress={() => setEditPending(null)} style={styles.ghostMini}>
+                    <Text style={styles.ghostMiniText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable onPress={saveEditPending} style={styles.primaryMini}>
+                    <Text style={styles.primaryMiniText}>Save</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
           </Pressable>
         </Pressable>
       </Modal>
@@ -560,4 +751,34 @@ const styles = StyleSheet.create({
   roleUser: { color: stylesVars.fg },
   roleAssist: { color: stylesVars.fgMuted },
   msg: { color: stylesVars.fg, fontWeight: "700", fontSize: 13, lineHeight: 18 },
+
+  pendingBox: {
+    borderTopWidth: 1,
+    borderTopColor: stylesVars.border,
+    paddingTop: 12,
+    marginBottom: 10,
+    maxHeight: 200,
+  },
+  pendingHeader: { color: stylesVars.fg, fontWeight: "900", fontSize: 13, marginBottom: 8 },
+  pendingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: stylesVars.border,
+  },
+  pendingKind: { color: stylesVars.fgMuted, fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6 },
+  pendingTitleText: { color: stylesVars.fg, fontWeight: "800", fontSize: 14, marginTop: 2 },
+  pendingActions: { flexDirection: "row", alignItems: "center", gap: 4 },
+  pendingIconBtn: { padding: 6 },
+
+  ghostMini: { paddingVertical: 10, paddingHorizontal: 12 },
+  ghostMiniText: { color: stylesVars.fgMuted, fontWeight: "800" },
+  primaryMini: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "#111",
+  },
+  primaryMiniText: { color: "#fff", fontWeight: "900" },
 });
