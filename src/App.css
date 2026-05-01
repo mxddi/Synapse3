@@ -516,6 +516,17 @@ li {
   background-color: var(--accent-dark);
 }
 
+.sug-card-actions .btn-accent {
+  background-color: #ea6c00;
+  border-color: #c2410c;
+  color: #fff;
+}
+
+.sug-card-actions .btn-accent:hover {
+  background-color: #c2410c;
+  border-color: #a33000;
+}
+
 /* ── Legend ────────────────────────────────────────────────────────────────── */
 .cal-legend {
   display: flex;
@@ -661,9 +672,9 @@ li {
 
 /* Suggested event style */
 .cal-event-suggested {
-  background-color: #FBBC05 !important;
-  color: #1a1a1a !important;
-  border: 2px dashed #d6a200;
+  background-color: #ea6c00 !important;
+  color: #fff !important;
+  border: 2px dashed rgba(255, 255, 255, 0.45);
   z-index: 3;
 }
 
@@ -672,7 +683,7 @@ li {
   background: rgba(0, 0, 0, 0.15);
   border: 1px solid rgba(0, 0, 0, 0.25);
   border-radius: 3px;
-  color: #1a1a1a;
+  color: #fff;
   font-size: 7.5pt;
   padding: 1px 5px;
   cursor: pointer;

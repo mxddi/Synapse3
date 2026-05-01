@@ -50,7 +50,7 @@ const CAL_INITIAL_SCROLL_HOUR = 7;
 const EVENT_COLORS = {
   google: { bg: "#4285F4", text: "#fff" },
   manual: { bg: "#34A853", text: "#fff" },
-  suggested: { bg: "#FBBC05", text: "#1a1a1a" },
+  suggested: { bg: "#EA6C00", text: "#fff" },
 };
 
 function OutlineButton({ title, onPress, disabled = false, rightIcon = null, style = null }) {
@@ -1512,11 +1512,11 @@ ${JSON.stringify(prioritized)}
                   const top = minuteToY(ev.startMinute);
                   const height = Math.max(20, minuteToY(ev.endMinute) - top);
                   const colors = ev.source === "google" ? EVENT_COLORS.google : EVENT_COLORS.manual;
+                  const titleLines = height >= 72 ? 4 : height >= 52 ? 3 : height >= 36 ? 2 : 1;
                   return (
                     <View key={ev.id} style={[styles.calEvent, { top, height, backgroundColor: colors.bg }]}>
-                      <Text style={[styles.calEventTitle, { color: colors.text }]} numberOfLines={1}>{ev.title}</Text>
-                      <Text style={[styles.calEventTime, { color: colors.text }]}>
-                        {minutesToDisplay(ev.startMinute)}–{minutesToDisplay(ev.endMinute)}
+                      <Text style={[styles.calEventTitle, { color: colors.text }]} numberOfLines={titleLines}>
+                        {ev.title}
                       </Text>
                     </View>
                   );
@@ -1525,11 +1525,11 @@ ${JSON.stringify(prioritized)}
                 {daySuggestions[dayIdx].map((s) => {
                   const top = minuteToY(s.startMinute);
                   const height = Math.max(24, minuteToY(s.endMinute) - top);
+                  const sugTitleLines = height >= 80 ? 3 : height >= 56 ? 2 : 1;
                   return (
                     <View key={s.sugId} style={[styles.calEvent, { top, height, backgroundColor: EVENT_COLORS.suggested.bg }]}>
-                      <Text style={[styles.calEventTitle, { color: EVENT_COLORS.suggested.text }]} numberOfLines={1}>✨ {s.taskTitle}</Text>
-                      <Text style={[styles.calEventTime, { color: EVENT_COLORS.suggested.text }]}>
-                        {minutesToDisplay(s.startMinute)}–{minutesToDisplay(s.endMinute)}
+                      <Text style={[styles.calEventTitle, { color: EVENT_COLORS.suggested.text }]} numberOfLines={sugTitleLines}>
+                        ✨ {s.taskTitle}
                       </Text>
                       <View style={styles.sugInlineActions}>
                         <Pressable style={styles.sugInlineBtn} onPress={() => addSuggestionToCalendar(s)}>
@@ -2300,9 +2300,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   calTimeGutter: {
-    width: 52,
+    width: 38,
     position: "relative",
-    marginRight: 8,
+    marginRight: -4,
   },
   calDayHeader: {
     flex: 1,
@@ -2451,13 +2451,13 @@ const styles = StyleSheet.create({
     borderTopColor: "#1C2740",
   },
   sugAddBtn: {
-    backgroundColor: "#FBBC05",
+    backgroundColor: "#EA6C00",
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
   },
   sugAddBtnText: {
-    color: "#1a1a1a",
+    color: "#fff",
     fontWeight: "900",
   },
 });
