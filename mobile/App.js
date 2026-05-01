@@ -1338,81 +1338,80 @@ ${JSON.stringify(prioritized)}
         </View>
         <Text style={styles.subtle}>{label}</Text>
         <View style={styles.spacer12} />
-        <View style={[styles.row, styles.calNavRow]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Previous"
-            onPress={() => {
-              if (calendarMode === "month") {
-                setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
-                return;
-              }
-              if (calendarMode === "day") {
-                if (selectedDayIndex > 0) {
-                  setSelectedDayIndex((d) => d - 1);
-                } else {
-                  state.setCurrentWeekStart((w) => addDays(w, -7));
-                  setSelectedDayIndex(6);
+        <View style={styles.calNavToolbarRow}>
+          <View style={styles.calNavLeftCluster}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous"
+              onPress={() => {
+                if (calendarMode === "month") {
+                  setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
+                  return;
                 }
-                return;
-              }
-              state.setCurrentWeekStart((w) => addDays(w, -7));
-            }}
-            style={styles.calChevronBtn}
-            hitSlop={8}
-          >
-            <Ionicons name="chevron-back" size={26} color={stylesVars.fg} />
-          </Pressable>
-          <View style={styles.spacer8} />
-          <OutlineButton title="Today" onPress={() => alignWeekTo(new Date())} />
-          <View style={styles.spacer8} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Next"
-            onPress={() => {
-              if (calendarMode === "month") {
-                setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
-                return;
-              }
-              if (calendarMode === "day") {
-                if (selectedDayIndex < 6) {
-                  setSelectedDayIndex((d) => d + 1);
-                } else {
-                  state.setCurrentWeekStart((w) => addDays(w, 7));
-                  setSelectedDayIndex(0);
+                if (calendarMode === "day") {
+                  if (selectedDayIndex > 0) {
+                    setSelectedDayIndex((d) => d - 1);
+                  } else {
+                    state.setCurrentWeekStart((w) => addDays(w, -7));
+                    setSelectedDayIndex(6);
+                  }
+                  return;
                 }
-                return;
-              }
-              state.setCurrentWeekStart((w) => addDays(w, 7));
-            }}
-            style={styles.calChevronBtn}
-            hitSlop={8}
-          >
-            <Ionicons name="chevron-forward" size={26} color={stylesVars.fg} />
-          </Pressable>
-        </View>
-        <View style={styles.spacer12} />
-        <View style={[styles.row, styles.calToolbarRow]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={state.isSyncingCal ? "Syncing calendar" : "Sync Google Calendar"}
-            onPress={syncCalendar}
-            disabled={state.isSyncingCal}
-            style={[styles.calToolbarIconBtn, state.isSyncingCal ? styles.calToolbarIconBtnDisabled : null]}
-            hitSlop={6}
-          >
-            <Ionicons name="cloud-download-outline" size={22} color={stylesVars.fg} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={state.isGenCalSug ? "Generating suggestions" : "Suggest schedule"}
-            onPress={generateCalendarSuggestions}
-            disabled={state.isGenCalSug}
-            style={[styles.calToolbarIconBtn, state.isGenCalSug ? styles.calToolbarIconBtnDisabled : null]}
-            hitSlop={6}
-          >
-            <Ionicons name="color-wand-outline" size={22} color={stylesVars.fg} />
-          </Pressable>
+                state.setCurrentWeekStart((w) => addDays(w, -7));
+              }}
+              style={styles.calChevronBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="chevron-back" size={24} color={stylesVars.fg} />
+            </Pressable>
+            <OutlineButton title="Today" onPress={() => alignWeekTo(new Date())} style={styles.calTodayBtn} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next"
+              onPress={() => {
+                if (calendarMode === "month") {
+                  setMonthAnchor((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
+                  return;
+                }
+                if (calendarMode === "day") {
+                  if (selectedDayIndex < 6) {
+                    setSelectedDayIndex((d) => d + 1);
+                  } else {
+                    state.setCurrentWeekStart((w) => addDays(w, 7));
+                    setSelectedDayIndex(0);
+                  }
+                  return;
+                }
+                state.setCurrentWeekStart((w) => addDays(w, 7));
+              }}
+              style={styles.calChevronBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="chevron-forward" size={24} color={stylesVars.fg} />
+            </Pressable>
+          </View>
+          <View style={styles.calNavRightCluster}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.isSyncingCal ? "Syncing calendar" : "Sync Google Calendar"}
+              onPress={syncCalendar}
+              disabled={state.isSyncingCal}
+              style={[styles.calToolbarIconBtn, state.isSyncingCal ? styles.calToolbarIconBtnDisabled : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="cloud-download-outline" size={21} color={stylesVars.fg} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.isGenCalSug ? "Generating suggestions" : "Suggest schedule"}
+              onPress={generateCalendarSuggestions}
+              disabled={state.isGenCalSug}
+              style={[styles.calToolbarIconBtn, state.isGenCalSug ? styles.calToolbarIconBtnDisabled : null]}
+              hitSlop={6}
+            >
+              <Ionicons name="color-wand-outline" size={21} color={stylesVars.fg} />
+            </Pressable>
+          </View>
         </View>
         <View style={styles.spacer8} />
         <Text style={styles.status}>{state.calendarStatus}</Text>
@@ -1988,29 +1987,45 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  calNavRow: {
+  calNavToolbarRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
+    flexWrap: "nowrap",
+    width: "100%",
+  },
+  calNavLeftCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+  },
+  calNavRightCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
+  },
+  calTodayBtn: {
+    flexShrink: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
   calChevronBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 38,
+    height: 38,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: stylesVars.border,
     backgroundColor: stylesVars.card2,
     alignItems: "center",
     justifyContent: "center",
-  },
-  calToolbarRow: {
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 4,
+    flexShrink: 0,
   },
   calToolbarIconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: stylesVars.border,
     backgroundColor: "transparent",
